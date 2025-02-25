@@ -1,0 +1,34 @@
+# Lista TO DO
+
+- [x] Regras de validação para parâmetros globais.
+- [x] Melhorar logs de erros em conntrack
+- [x] Melhorar tratamento de regras para endereços de ping:
+  - [x] Exigir no mínimo 1 endereço IP
+  - [x] Recomendar que o endereço IP seja o primeiro da lista para agilizar os testes
+  - [x] A mesma validação de global, ser aplicada em configuração personalizada em WANS
+- [x] Reduzir tempo de teste de links
+- [x] Melhorar lógica de sleepTest em decorrência do tempo de execução do último teste de link.
+- [x] Não usar módulo/lib externo para garantir um repositório único do projeto.
+  - [x] Mapear quais funções serão migradas para o multiwans
+- [ ] Validar a estrutura dos logs no console e no corpo do e-mail.
+- [ ] Comentar as funções
+- [x] Revisar a mensagem de invalidParam()
+- [ ] Validar que mark está sendo salvo em conntrack, para garantir o filtro de exclusão de registros.
+  - [ ] Caso negativo, mudar o código para filtrar pelo ip da interface de rede ao invés de mark.
+- [ ] Editar README.md
+  - [ ] Falar de STATUS_FILE, e como monitorar ele.
+- [x] STATUS_FILE ser um parâmetro de config.yaml?
+- [x] Revisar envio de e-mail
+  - [x] definições de servidor, usuário e senha devem ficar definidas no arquivo de configuração?
+  - [x] Assunto e status.
+- [x] Melhorado estrutura de tabelas
+- [x] ícones em formato unicode
+- [x] Mudar estrutura yaml de ping, dns e alert para igual a config de e-mail
+- [ ] Criar arquivo config.example.yaml com valores genéricos
+- [x] getConfig() retornar lista separado por virgula? ou seria melhor valores por linha e evitar uso de IFS=, ?
+- [x] Configurações globais serem definidas em variáveis globais em checkConfig()?
+- [ ] Criar lógica de diretório de scripts UP() e DOWN()
+- [x] Verificar conflito de checkConfig e statusFile.
+- [x] Revisar config.yaml
+- [ ] Garantir rpfilter esteja desativado em todas as interfaces
+- [ ] Revisão do campo status em footer()

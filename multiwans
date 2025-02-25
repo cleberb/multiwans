@@ -1,0 +1,2289 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2317,SC2155,SC2086
+
+###############################################################################################################
+# Informações do sistema
+###############################################################################################################
+
+DESCRIPTION="MultiWans - Failover e redirecionamento de links WANS"
+DEVELOPER="Cleberson Batista"
+VERSION="1.0"
+
+###############################################################################################################
+# Opções de configuração do Bash
+###############################################################################################################
+
+# Bash vai se lembrar e voltar o mais alto exitcode em uma cadeia de pipes.
+set -o pipefail
+
+# Esta opção permite que os comandos executado após pipeline (|) sejam executados na shell atual e não em um subshell.
+# Esta propriedade possibilita a edição de variáveis da shell atual.
+shopt -s lastpipe
+
+# Variável responsável por listar diretórios de executáveis do sistema
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
+
+# Define linguagem padrão para utilização nos comandos utilizados pelo script
+# Se for Debian
+if [ -e /etc/debian_version ]; then
+  export LANG="C.UTF-8" 2> /dev/null
+  export LC_ALL="C.UTF-8" 2> /dev/null
+else
+  export LANG="en_US.UTF-8" 2> /dev/null
+  export LC_ALL="en_US.UTF-8" 2> /dev/null
+fi
+
+# Definir umask restritivo para o script
+# shellcheck disable=SC2034
+umask=007
+
+# Nome do script
+SCRIPT_NAME="$(basename "$0")"
+
+# Diretório raiz do script
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Caminho absoluto do script
+SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_NAME"
+
+# Definir início de execução de script
+START_TIME=$(date +%s);
+
+# Variável utilizada no registro de info do sistema
+LOG_TIME=$(date +%Y%m%d%H%M%S -d @$START_TIME)
+
+# Variável utilizada em mensagens para usuário
+SHOW_TIME=$(date +%Y-%m-%d\ %H:%M:%S -d @$START_TIME)
+
+# Caminho conntrack
+CONNTRACK=$(command -v conntrack)
+
+# Caminho ipset
+IPSET=$(command -v ipset)
+
+RGXG=$(command -v rgxg)
+
+CURL=$(command -v curl)
+
+# Caminho yq
+YQ="/usr/local/bin/yq"
+
+# Cliente de envio de email
+SENDEMAIL=$(command -v sendemail || command -v sendEmail)
+
+# Definição de ícones para diferentes tipos de mensagens
+ICON_INFO="\\U2139\\UFE0F"
+ICON_SUCCESS="\\U2705"
+ICON_WARNING="\\U26A0\\UFE0F"
+ICON_ERROR="\\U274C"
+
+# Bordas de tabela
+_TB_TOP="╭────────────────────────────────────────────────────────────────────────────────────"
+_TB_INNER="├────────────────────────────────────────────────────────────────────────────────────"
+_TB_BOTTOM="╰────────────────────────────────────────────────────────────────────────────────────"
+_TB_LINE="│"
+
+# Hostname
+HOSTNAME=$(hostname)
+
+###############################################################################################################
+# Variáveis de configurações
+###############################################################################################################
+
+# Arquivo de configuração do sistema
+SETTINGS_FILE="${SCRIPT_DIR}/config.yaml"
+
+###############################################################################################################
+# Funções de controle
+###############################################################################################################
+
+function _exit(){
+
+  # Sinal utilizado para sair do script
+  local signal=$1
+
+  # Status do último comando executado
+  local status=$2
+
+  case $signal in
+    SIGINT)
+      # SIGINT: Interromper processo ao pressionar Ctrl-C no teclado.
+      _warning "Processo recebeu sinal SIGINT(Ctrl-C) e será interrompido."
+    ;;
+    SIGQUIT)
+      # SIGQUIT: Finalizar processo ao pressionar Ctrl-\ no teclado.
+      _warning "Processo recebeu sinal SIGQUIT(Ctrl-\\) e será finalizado."
+    ;;
+    SIGTERM)
+      # SIGTERM: Finalizar processo através dos comandos "kill" ou "killall".
+      _warning "Processo recebeu sinal SIGTERM e será finalizado."
+    ;;
+    SIGHUP)
+      # SIGHUP: Desligar ou sair de um processo em execução em primeiro plano de um terminal
+      _warning "Processo recebeu sinal SIGHUP e será finalizado."
+    ;;
+  esac
+
+  stopDaemon
+
+  # Define ação padrão para o sinal EXIT. Caso contrário repetirá as ações desta função ao
+  # executar o comando exit abaixo.
+  trap - EXIT
+
+  # Sair do script
+  [ "$status" != "" ] && exit $status || exit 0
+
+}
+
+# Função responsável por sair do script sem chamar tratamentos especiais
+function die(){
+
+  # Define ação padrão para o sinal EXIT. Caso contrário repetirá as ações do TRAP ao
+  # executar o comando exit abaixo.
+  trap - EXIT
+
+  exit $1
+
+}
+
+# Registrar mensagens informativas
+function info(){
+  local message="$*\n"
+  LOG_MESSAGE+="${message}"
+  echo -ne "$message" | tee >(sed '/^$/d' | logger --priority daemon.info --tag ${SCRIPT_NAME}[$$])
+}
+
+# Registrar mensagens de erros
+function error(){
+  local message="$*\n"
+  LOG_MESSAGE+="${message}"
+  STATUS="ERROR"
+  echo -ne "$message" | tee >(sed '/^$/d' | logger --priority daemon.err --tag ${SCRIPT_NAME}[$$]) >&2
+}
+
+function _info(){
+  local message="$1"
+
+  # shellcheck disable=SC2001
+  info "$(echo -e "$ICON_INFO INFO:$(sed 's/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
+}
+
+function _success(){
+  local message="$1"
+
+  # shellcheck disable=SC2001
+  info "$(echo -e "$ICON_SUCCESS $(sed 's/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
+}
+
+function _error(){
+  local message="$1"
+
+  # shellcheck disable=SC2001
+  error "$(echo -e "$ICON_ERROR ERROR:$(sed 's/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
+}
+
+function _warning(){
+  local message="$1"
+
+  # shellcheck disable=SC2001
+  error "$(echo -e "$ICON_WARNING WARNING:$(sed 's/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
+}
+
+function mail(){
+  local status=$1
+
+  local emailFrom=$(getConfig email.from)
+  local emailTo=$(getConfig email.to)
+  local emailHost=$(getConfig email.host)
+  local emailPort=$(getConfig email.port)
+  local emailUsername=$(getConfig email.username)
+  local emailPassword=$(getConfig email.password)
+
+  [ "$emailUsername" ] && local _login="-xu $emailUsername -xp $emailPassword"
+
+  # TODO: Incluir server, user, passwd
+  local result
+  result=$($SENDEMAIL -f $emailFrom \
+                      -t $emailTo \
+                      -u "${status}: $DESCRIPTION: $HOSTNAME ($SHOW_TIME)" \
+                      -o reply-to=$emailFrom \
+                      -o message-charset=utf-8 \
+                      -m "$(echo -e "$LOG_MESSAGE" | sed '1s/^-/\n-/g')" \
+                      -s $emailHost:$emailPort \
+                      $_login \
+                      2>&1
+  )
+
+  if [ "$?" == "0" ]; then
+    _info "$result"
+  else
+    _error "$result"
+  fi
+}
+
+# Uptime system
+function uptime(){
+  local uptime=$(cut -d. -f1 /proc/uptime)
+
+  local d h m s parts=()
+  (( d = uptime / 60 / 60 / 24 )) && parts+=("$d dia(s)")
+  (( h = uptime / 60 / 60 % 24 )) && parts+=("$h hora(s)")
+  (( m = uptime / 60 % 60 )) && parts+=("$m min.")
+  (( s = uptime % 60 )) && parts+=("$s seg.")
+
+  # Junta os elementos com ", " e substitui a última vírgula por " e "
+  # shellcheck disable=SC2001
+  echo -n "$(IFS=', '; echo "${parts[*]}" | sed 's/, \(.*\)$/ e \1/')"
+
+}
+
+# Cabeçalho informativo
+function header(){
+  echo -e "\n$_TB_TOP"
+  echo -e "$_TB_LINE $DESCRIPTION"
+  echo -e "$_TB_INNER"
+
+  # Endereços IP's
+  IP_LIST=$(ip -oneline -details link show | grep -Ev 'state DOWN|ifb[0-9]+|bridge|loopback|link/none|link/ipip' | awk '{print $2}' | sed 's/:\|\ //g' | xargs -n 1 ip -4 -br a s | awk '{print $1": "$3}' | sort | pr --across --omit-pagination --join-lines --columns=3)
+
+  column -s'£' -t < <(
+    echo -e "$_TB_LINE Hostname:£$HOSTNAME"
+    echo -e "$_TB_LINE Endereço(s) IP(s):£$(echo -e "$IP_LIST" | sed -e "1!s/^/$_TB_LINE £/g")"
+    echo -e "$_TB_LINE Uptime do sistema:£$(uptime)"
+    echo -e "$_TB_LINE Início do processo:£$SHOW_TIME"
+  )
+
+  echo -e "$_TB_BOTTOM"
+}
+
+# Rodapé informativo
+function footer(){
+  echo -e "\n$_TB_TOP"
+  echo -e "$_TB_LINE INFORMAÇÕES DO SISTEMA"
+  echo "$_TB_INNER"
+
+  column -s'£' -t < <(
+    echo "$_TB_LINE DESCRIÇÃO:£$DESCRIPTION"
+    echo "$_TB_LINE DESENVOLVEDOR:£$DEVELOPER"
+    echo "$_TB_LINE VERSÃO:£$VERSION"
+  )
+
+  echo "$_TB_BOTTOM"
+
+  echo -e "\n© $(tr '[:lower:]' '[:upper:]' <<< $COMPANY_NAME) - $COMPANY_DEPARTMENT - $(date +%Y)"
+  echo -e "$COMPANY_SITE\n"
+}
+
+# Calcula e emite duração do processamento do script
+function runtime(){
+  local status=$STATUS
+
+  local endTime=$(date +%s)
+
+  local totalTime=$((endTime - START_TIME))
+
+  if [ "$totalTime" != "0" ]; then
+    local d h m s parts=()
+    (( d = uptime / 60 / 60 / 24 )) && parts+=("$d dia(s)")
+    (( h = uptime / 60 / 60 % 24 )) && parts+=("$h hora(s)")
+    (( m = uptime / 60 % 60 )) && parts+=("$m min.")
+    (( s = uptime % 60 )) && parts+=("$s seg.")
+
+    # Junta os elementos com ", " e substitui a última vírgula por " e "
+    # shellcheck disable=SC2001
+    local duration="$(IFS=', '; echo "${parts[*]}" | sed 's/, \(.*\)$/ e \1/')"
+  else
+    local duration="0 seg."
+  fi
+
+  echo -e "\n$_TB_TOP"
+  echo "$_TB_LINE PROCESSAMENTO FINALIZADO"
+  echo "$_TB_INNER"
+
+  column -s'£' -t < <(
+    echo "$_TB_LINE Status:£${status}"
+    echo "$_TB_LINE"
+    echo "$_TB_LINE Fim do processo:£$(date +%Y-%m-%d\ %H:%M:%S -d @${endTime})"
+    echo "$_TB_LINE Duração do processo:£$duration"
+  )
+
+  echo "$_TB_BOTTOM"
+}
+
+# Verificar se o daemon já está em execução
+function statusExec() {
+
+  # Retorna positivo (0) se não estiver em execução
+  pidof -o $$ -o $PPID -o %PPID -x balance.sh > /dev/null 2>&1 && return 1 || return 0
+
+}
+
+function installYq(){
+
+  # Verificar a última versão do `yq`
+  local latest_version
+  if ! latest_version=$($CURL -s https://api.github.com/repos/mikefarah/yq/releases/latest 2>&1 | grep '"tag_name":' | cut -d '"' -f 4) || [ "$latest_version" == "" ]; then
+    _warning "Não foi possível descobrir última versão da ferramenta \"yq\":\n$latest_version"
+    return 1
+  fi
+
+  local installed_version="none"
+  if [ -f "$YQ" ] && [ -x "$YQ" ]; then
+    installed_version=$($YQ --version | awk '{print $NF}')
+  fi
+
+  [ "$installed_version" == "$latest_version" ] && return 0
+
+  # Baixar o arquivo e capturar erros
+  log_curl_err=$(mktemp)
+  rm -f /tmp/yq_linux_amd64* 2> /dev/null
+  if ! $CURL -L https://github.com/mikefarah/yq/releases/download/${latest_version}/yq_linux_amd64.tar.gz -o /tmp/yq_linux_amd64.tar.gz 2> $log_curl_err; then
+    _warning "Falha ao realizar download da ferramenta \"yq\" versão ${latest_version}:\n$(cat $log_curl_err)"
+    return 1
+  fi
+
+  # Extrair e mover para /usr/local/bin
+  log_tar_err=$(mktemp)
+  if ! tar xzf "/tmp/yq_linux_amd64.tar.gz" -C /tmp/ 2> $log_tar_err; then
+    _warning "Falha ao extrair a ferramenta \"yq\" versão ${latest_version}:\n$(cat $log_tar_err)"
+    return 1
+  fi
+
+  mv /tmp/yq_linux_amd64 $YQ
+  chmod 755 $YQ
+  rm -f $log_curl_err $log_tar_err
+
+  _success "\"yq\" instalado/atualizado para versão ${latest_version}."
+
+}
+
+# Carregar arquivo de configurações
+function loadSettings(){
+
+  # Arquivo de configuração
+  if [ -r "$SETTINGS_FILE" ]; then
+
+    # Verificar o carregamento sem erros do arquivo de configurações
+    if ! SETTINGS_YAML=$($YQ -e '... comments = ""' $SETTINGS_FILE 2>&1); then
+      _error "O arquivo de configurações \"$SETTINGS_FILE\" contem algum erro:\n$SETTINGS_YAML"
+      die 1
+    fi
+
+  else
+    _error "O arquivo de configurações \"$SETTINGS_FILE\" não pode ser lido ou não existe!"
+    die 1
+  fi
+
+}
+
+# Obter o valor de uma chave do YAML
+function getConfig() {
+  local key="$1"
+  local value=$(yq ".$key | to_string | select(. != \"null\") // \"\" | trim" <<< "$SETTINGS_YAML")
+
+  if $YQ -e 'select(type == "!!seq")' &> /dev/null <<< "$value"; then
+    if ! $YQ -e '. | .[] | select(type == "!!seq" or type == "!!map")' &> /dev/null <<< "$value"; then
+      value=$($YQ '.[]' <<< "$value")
+    fi
+  fi
+
+  echo "$value"
+}
+
+# Definir o valor de uma chave no YAML
+function setConfig() {
+  local action
+  if [[ "$1" =~ --addToList|--removeFromList ]]; then
+    action="$1"
+    shift
+  fi
+
+  local key="$1"
+  local value="$2"
+
+  case "$action" in
+    "--addToList")
+      SETTINGS_YAML=$(yq ".${key} += [\"$value\"]" <<< "$SETTINGS_YAML")
+    ;;
+    "--removeFromList")
+      SETTINGS_YAML=$(yq ".${key} |= map(select(. != \"$value\"))" <<< "$SETTINGS_YAML")
+    ;;
+    *)
+      SETTINGS_YAML=$(yq ".$key = \"$value\"" <<< "$SETTINGS_YAML")
+    ;;
+  esac
+}
+
+# Listar IDs de qualquer lista no YAML
+function getListIds() {
+  local key="$1"
+  yq ".$key // {} | keys | join(\"\n\")" <<< "$SETTINGS_YAML"
+}
+
+function setGlobalConfig(){
+  COMPANY_NAME=$(getConfig company.name)
+  COMPANY_DEPARTMENT=$(getConfig company.department)
+  COMPANY_SITE=$(getConfig company.site)
+  DAEMON_RUN_INTERVAL=$(getConfig daemon.runInterval)
+  DAEMON_STATUS_FILE=$(getConfig daemon.statusFile)
+  ALERTS_MAX=$(getConfig alerts.max)
+  ALERTS_RESEND=$(getConfig alerts.resend)
+  PING_COUNT=$(getConfig ping.count)
+  PING_TIMEOUT=$(getConfig ping.timeout)
+  DNS_RETRY=$(getConfig dns.retry)
+  DNS_TIMEOUT=$(getConfig dns.timeout)
+  LOCALNETS=$(getConfig localnets)
+
+  # Criar/limpar arquivo de status de links WANS
+  install -m 644 /dev/null $DAEMON_STATUS_FILE
+}
+
+# Verificação e definição de valores padrões de configurações
+function validAndSetConfig(){
+
+  # Regex especiais
+  local email_regex='^([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})$|^([a-zA-Z0-9_]+)$'
+  local iface_regex='^((eth|vlan)[0-9]+|en(o|s)[a-f0-9]{1,2}|enp[a-f0-9]{1,2}s[a-f0-9]{1,2}(f[a-f0-9]{1,2})?|enx[a-f0-9]+)([\:\.][0-9]+)?$'
+  local ip_regex='^(([0-9]{1,2}|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.){3}([0-9]{1,2}|1[0-9][0-9]|2[0-4][0-9]|25[0-5])$'
+  local ip_cidr_regex='^(([0-9]{1,2}|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.){3}([0-9]{1,2}|1[0-9][0-9]|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))*$'
+  local domain_regex='^([a-z0-9-]+\.){1,}([a-z]+\.*){1,2}$'
+  local mask_cidr_regex='^([0-9]|[1-2][0-9]|3[0-2])$'
+  local protocol_regex='^(all|tcp|udp|udplite|sctp|icmp|gre|esp|ah)$'
+  local protocol_no_port_regex='^(icmp|gre|esp|ah)$'
+  local port_regex='^((6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3}|0)(:(6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3}))?)$'
+  local integer_regex='^[0-9]+$'
+  local boolean_regex='^(true|false)$'
+  local chainMangle_regex='^(PREROUTING|OUTPUT)$'
+
+  function invalidParam(){
+    local option=$1
+
+    # Tratar os parâmetros para mostrar os valores nos logs
+    case "$option" in
+      --global)
+        param=$2
+        value=${3:+ \"$3\"}
+        instructions=${4:+\\n$4}
+        _error "O parâmetro de configuração global \"${param}\" está com valor(s)${value} inválido(s).${instructions}\nVerifique o arquivo de configurações: $SETTINGS_FILE"
+      ;;
+      --wan)
+        wanId=$2
+        param=$3
+        value=${4:+ \"$4\"}
+        instructions=${5:+\\n$5}
+
+        local wanDescription=$(getConfig "WANS[$wanId].description")
+        _error "O parâmetro de configuração \"${param}\" do link \"${wanDescription:-$wanId}\" está com valor(s)${value} inválido(s).${instructions}\nVerifique o arquivo de configurações: $SETTINGS_FILE"
+      ;;
+      --filter)
+        wanId=$2
+        filterId=$3
+        param=$4
+        value=${5:+ \"$5\"}
+        instructions=${6:+\\n$6}
+
+        local wanDescription=$(getConfig "WANS[$wanId].description")
+        local filterDescription=$(getConfig "WANS[$wanId].filters[$filterId].description")
+        _error "O parâmetro de configuração \"${param}\" do filtro \"${filterDescription:-$filterId}\" do link \"$wanDescription\" está com valor(s)${value} inválido(s).${instructions}\nVerifique o arquivo de configurações: $SETTINGS_FILE"
+      ;;
+    esac
+
+    die 1
+  }
+
+  # daemon.runInterval
+  local daemonRunInterval=$(getConfig daemon.runInterval)
+  if [ "$daemonRunInterval" == "" ]; then
+    setConfig daemonRunInterval 30
+  elif ! [[ "$daemonRunInterval" =~ $integer_regex ]] || [ "$daemonRunInterval" -lt 10 ] || [ "$daemonRunInterval" -gt 60 ]; then
+    invalidParam --global daemonRunInterval "$daemonRunInterval" "O valor deve ser um número inteiro de 10 a 60."
+  fi
+
+  # alerts.max
+  local alertsMax=$(getConfig alerts.max)
+  if [ "$alertsMax" == "" ]; then
+    setConfig alerts.max 3
+  elif ! [[ "$alertsMax" =~ $integer_regex ]] || [ "$alertsMax" -lt 2 ] || [ "$alertsMax" -gt 10 ]; then
+    invalidParam --global alerts.max "$alertsMax" "O valor deve ser um número inteiro de 2 a 10."
+  fi
+
+  # alerts.resend
+  local alertsResend=$(getConfig alerts.resend)
+  if [ "$alertsResend" == "" ]; then
+    setConfig alerts.resend 30
+  elif ! [[ "$alertsResend" =~ $integer_regex ]] || [ "$alertsResend" -lt 20 ] || [ "$alertsResend" -gt 250 ]; then
+    invalidParam --global alerts.resend "$alertsResend" "O valor deve ser um número inteiro de 20 a 250."
+  fi
+
+  # ping.count
+  local pingCount=$(getConfig ping.count)
+  if [ "$pingCount" == "" ]; then
+    setConfig ping.count 1
+  elif ! [[ "$pingCount" =~ $integer_regex ]] || [ "$pingCount" -lt 1 ] || [ "$pingCount" -gt 2 ]; then
+    invalidParam --global ping.count "$pingCount" "O valor deve ser um número inteiro 1 ou 2."
+  fi
+
+  # ping.timeout
+  local pingTimeout=$(getConfig ping.timeout)
+  if [ "$pingTimeout" == "" ]; then
+    setConfig ping.timeout 3
+  elif ! [[ "$pingTimeout" =~ $integer_regex ]] || [ "$pingTimeout" -lt 1 ] || [ "$pingTimeout" -gt 5 ]; then
+    invalidParam --global ping.timeout "$pingTimeout" "O valor deve ser um número inteiro de 1 a 5."
+  fi
+
+  # ping.targets
+  local first=true
+  local hasIp=false
+  local address
+  for address in $(getConfig ping.targets); do
+    if [[ $address =~ $ip_regex ]]; then
+      hasIp=true
+    elif ! [[ $address =~ $domain_regex ]]; then
+      invalidParam --global ping.targets "$address" "Necessário um endereço de domínio ou IPv4 válido."
+    elif $first; then
+      _warning "O parâmetro de configuração global \"ping.targets\" não possui um endereço IPv4 como primeiro valor."
+    fi
+    first=false
+  done
+
+  # Obrigatório no mínimo um endereço IPv4
+  if ! $hasIp; then
+    invalidParam --global ping.targets "" "Pelo menos um endereço deve ser um IPv4 válido."
+  fi
+
+  # dns.retry
+  local dnsRetry=$(getConfig dns.retry)
+  if [ "$dnsRetry" == "" ]; then
+    setConfig dns.retry 1
+  elif ! [[ "$dnsRetry" =~ $integer_regex ]] || [ "$dnsRetry" -lt 1 ] || [ "$dnsRetry" -gt 5 ]; then
+    invalidParam --global dns.retry "$dnsRetry" "O valor deve ser um número inteiro de 1 a 5."
+  fi
+
+  # Timeout de pesquisa em servidor DNS
+  local dnsTimeout=$(getConfig dns.timeout)
+  if [ "$dnsTimeout" == "" ]; then
+    setConfig dns.timeout 2
+  elif ! [[ "$dnsTimeout" =~ $integer_regex ]] || [ "$dnsTimeout" -lt 1 ] || [ "$dnsTimeout" -gt 10 ]; then
+    invalidParam --global dns.timeout "$dnsTimeout" "O valor deve ser um número inteiro de 1 a 10."
+  fi
+
+  # dns.servers
+  local _ip
+  for _ip in $(getConfig dns.servers); do
+    if ! [[ $_ip =~ $ip_regex ]]; then
+      invalidParam --global dns.servers "$_ip" "Necessário um endereço IPv4 válido."
+    fi
+  done
+
+  # localnets
+  local _ip
+  for _ip in $(getConfig localnets); do
+    if ! [[ $_ip =~ $ip_cidr_regex ]]; then
+      invalidParam --global localnets "$_ip" "Necessário um endereço IPv4 válido."
+    fi
+  done
+
+  # email.from
+  local emailFrom=$(getConfig "email.from")
+  if [ "$emailFrom" == "" ]; then
+    setConfig email.from "root"
+  elif ! [[ "$emailFrom" =~ $email_regex ]]; then
+    invalidParam --global email.from "$emailFrom"
+  fi
+
+  # email.to
+  local emailTo=$(getConfig email.to)
+  if [ "$emailTo" == "" ]; then
+    setConfig email.to "root"
+  else
+    local _email
+    for _email in ${src}; do
+      if ! [[ "$emailTo" =~ $email_regex ]]; then
+        invalidParam --global email.to "$emailTo"
+      fi
+    done
+  fi
+
+  # email.host
+  local emailHost=$(getConfig email.host)
+  if [ "$emailHost" == "" ]; then
+    setConfig email.host "localhost"
+  elif ! [[ $emailHost =~ $ip_regex ]] && ! [[ $emailHost =~ $domain_regex ]]; then
+    invalidParam --global "email.host" "$emailHost" "Necessário um endereço de domínio ou IPv4 válido."
+  fi
+
+  # email.port
+  local emailPort=$(getConfig email.port)
+  if [ "$emailPort" == "" ]; then
+    setConfig email.port 25
+  elif ! [[ "$emailPort" =~ $integer_regex ]] || [ $emailPort -lt 1 ] || [ $emailPort -gt 65535 ]; then
+    invalidParam --global "email.port" "$emailPort" "Valores válidos: [1 até 65535]."
+  fi
+
+  # email.username
+  local emailUsername=$(getConfig email.username)
+  if [ "$emailUsername" != "" ]; then
+    if ! [[ "$emailUsername" =~ $email_regex ]]; then
+      invalidParam --global "email.username" "$emailUsername"
+    fi
+  fi
+
+  # email.password
+  local emailPassword=$(getConfig email.password)
+  if [ "$emailUsername" != "" ] && [ "$emailPassword" == "" ]; then
+    invalidParam --global "email.password" "$emailPassword" "O parâmetro \"email.username\" foi declarado, logo \"email.password\" é obrigatório."
+  fi
+
+  setGlobalConfig
+
+  local wanId
+  for wanId in $(getListIds WANS); do
+
+    local enabled=$(getConfig "WANS[$wanId].enabled")
+
+    # Link desabilitado, continuar para o próximo link disponível
+    [ "$enabled" == "false" ] && continue
+
+    local mark=$(getConfig "WANS[$wanId].mark")
+    local description=$(getConfig "WANS[$wanId].description")
+    local orderFailover=$(getConfig "WANS[$wanId].orderFailover")
+    local iface=$(getConfig "WANS[$wanId].iface")
+    local ip=$(getConfig "WANS[$wanId].ip")
+    local mask=$(getConfig "WANS[$wanId].mask")
+    local gateway=$(getConfig "WANS[$wanId].gateway")
+    local dns=$(getConfig "WANS[$wanId].dns")
+    local ping=$(getConfig "WANS[$wanId].ping")
+    local filters=$(getListIds "WANS[$wanId].filters")
+
+    # enabled
+    if [ "$enabled" == "" ]; then
+      setConfig "WANS[$wanId].enabled" "true"
+    elif ! [[ "$enabled" =~ $boolean_regex ]]; then
+      invalidParam --wan $wanId enabled "$enabled" "O valor deve ser booleano (true|false)."
+    fi
+
+    # description
+    [ "$description" ] || invalidParam --wan $wanId description "" "A descrição é obrigatória."
+    [ ${#description} -le 100 ] || invalidParam --wan $wanId description "$description" "O comprimento da descrição excede o máximo permitido (100 caracteres)."
+
+    # orderFailover
+    if [ "$orderFailover" == "" ]; then
+      setConfig "WANS[$wanId].orderFailover" "disabled"
+    elif ! [[ "$orderFailover" =~ $integer_regex ]] || [ "$orderFailover" -lt 1 ] || [ "$orderFailover" -gt 252 ]; then
+      invalidParam --wan $wanId orderFailover "$orderFailover" "O valor deve ser nulo ou um número inteiro de 1 a 252."
+    fi
+
+    [ "$($YQ '.WANS | map(select(.enabled == true and .orderFailover != "disabled")) | group_by(.orderFailover) | .[] | select(length > 1) | length > 1' <<< "$SETTINGS_YAML")" == "true" ] && \
+    invalidParam --wan $wanId orderFailover "$orderFailover" "O valor está duplicado entre as declarações dos links WANS."
+
+    local countWans=$($YQ '[.WANS[] | select(.enabled == true and .orderFailover != "disabled")] | length' <<< "$SETTINGS_YAML")
+    sequenceWans=$(paste -sd, <(seq 1 $countWans))
+    currentSequenceWans=$($YQ -r '[.WANS[] | select(.enabled == true and .orderFailover != "disabled") | .orderFailover] | sort | join(",")' <<< "$SETTINGS_YAML")
+    [ "$sequenceWans" != "$currentSequenceWans" ] && invalidParam --wan $wanId orderFailover "" "A sequencia de ordenação deve ser crescente, iniciando em 1. Sequência atual nos links válidos: \"$currentSequenceWans\"."
+
+    # mark
+    if ! [[ "$mark" =~ $integer_regex ]] || [ "$mark" -lt 1 ] || [ "$mark" -gt 252 ]; then
+      invalidParam --wan $wanId mark "$mark" "O valor deve ser nulo ou um número inteiro de 1 a 252."
+    fi
+
+    [ "$($YQ '.WANS | group_by(.mark) | .[] | select(length > 1) | length > 1' <<< "$SETTINGS_YAML")" == "true" ] && \
+    invalidParam --wan $wanId mark "$mark" "O valor está duplicado entre as declarações dos links WANS."
+
+    # iface
+    [[ "$iface" =~ $iface_regex ]] || invalidParam --wan $wanId iface "$iface"
+
+    # ip
+    [[ "$ip" =~ $ip_regex ]] || invalidParam --wan $wanId ip "$ip"
+
+    # mask
+    if ! [[ "$mask" =~ $mask_cidr_regex ]] && { [ "$mask" -lt 0 ] && [ "$mark" -gt 32 ]; }; then
+      invalidParam --wan $wanId mask "$mask" "O valor deve ser um número inteiro de 0 a 32."
+    fi
+
+    # gateway
+    [[ "$gateway" =~ $ip_regex ]] || invalidParam --wan $wanId gateway "$gateway"
+
+    # dns
+    if [ "$dns" == "" ]; then
+      local _ip
+      for _ip in $(getConfig dns.servers); do
+        setConfig --addToList "WANS[$wanId].dns" $_ip
+      done
+    else
+      local _ip
+      for _ip in $dns; do
+        if ! [[ "$_ip" =~ $ip_regex ]]; then
+          invalidParam --wan $wanId dns "$_ip" "Necessário um endereço IPv4 válido."
+        fi
+      done
+    fi
+
+    # ping
+    if [ "$ping" == "" ]; then
+      local address
+      for address in $(getConfig ping.targets); do
+        setConfig --addToList "WANS[$wanId].ping" $address
+      done
+    else
+      local first=true
+      local hasIp=false
+      local address
+      for address in $ping; do
+        if [[ $address =~ $ip_regex ]]; then
+          hasIp=true
+        elif [[ ! $address =~ $domain_regex ]]; then
+          invalidParam --wan $wanId ping "$address" "Necessário um endereço de domínio ou IPv4 válido."
+        elif $first; then
+          _warning "O parâmetro de configuração \"ping\" do link \"${description}\" não possui um endereço IPv4 como primeiro valor."
+        fi
+        first=false
+      done
+
+      # Obrigatório no mínimo um endereço IPv4
+      if ! $hasIp; then
+        invalidParam --wan $wanId ping "" "Pelo menos um endereço deve ser um IPv4 válido."
+      fi
+    fi
+
+    # filters
+    # Verificar se é o link principal, de ordem "1"
+    if [ "$orderFailover" == "1" ]; then
+      continue
+    fi
+
+    local filterId
+    for filterId in $filters; do
+
+      local filter_enabled=$(getConfig "WANS[$wanId].filters[$filterId].enabled")
+
+      # enabled
+      if [ "$filter_enabled" == "" ]; then
+        setConfig "WANS[$wanId].filters[$filterId].enabled" "true"
+      elif ! [[ "$filter_enabled" =~ $boolean_regex ]]; then
+        invalidParam --filter $wanId $filterId enabled "$filter_enabled" "O valor deve ser booleano (true|false)."
+      fi
+
+      # Filtro desabilitado, continuar para o próximo filtro disponível
+      [ "$filter_enabled" == "false" ] && continue
+
+      local filter_description=$(getConfig "WANS[$wanId].filters[$filterId].description")
+      local filter_note=$(getConfig "WANS[$wanId].filters[$filterId].note")
+      local chainMangle=$(getConfig "WANS[$wanId].filters[$filterId].chainMangle")
+      local src=$(getConfig "WANS[$wanId].filters[$filterId].src")
+      local dst=$(getConfig "WANS[$wanId].filters[$filterId].dst")
+      local protocol=$(getConfig "WANS[$wanId].filters[$filterId].protocol")
+      local sports=$(getConfig "WANS[$wanId].filters[$filterId].sports")
+      local dports=$(getConfig "WANS[$wanId].filters[$filterId].dports")
+
+      # description
+      [ "$filter_description" ] || invalidParam --filter $wanId $filterId description "" "A descrição é obrigatória."
+
+      [ ${#filter_description} -le 100 ] || invalidParam --filter $wanId $filterId description "$filter_description" "O comprimento da descrição excede o máximo permitido (100 caracteres)."
+
+      [ "$($YQ '.WANS | map(.filters[] | .description) | group_by(.) | .[] | select(length > 1) | length > 1' <<< "$SETTINGS_YAML")" == "true" ] && \
+      invalidParam --filter $wanId $filterId description "$filter_description" "A descrição está duplicada entre as declarações de filtros dos links WANS."
+
+      # chainMangle
+      if grep -Eq '[[:lower:]]' <<< "$chainMangle"; then
+        chainMangle=${chainMangle^^}
+        # Valor obrigatoriamente deve ser Maiúsculo
+        setConfig "WANS[$wanId].filters[$filterId].chainMangle" "$chainMangle"
+      fi
+
+      if ! [[ "$chainMangle" =~ $chainMangle_regex ]]; then
+        invalidParam --filter $wanId $filterId chainMangle "$chainMangle" "Valores válidos [PREROUTING|OUTPUT]."
+      fi
+
+      # src
+      if [ "$src" == "" ]; then
+        src="0.0.0.0/0"
+        # Definir endereço
+        setConfig --addToList "WANS[$wanId].filters[$filterId].src" "$src"
+      else
+        local _ip
+        for _ip in ${src}; do
+          if ! [[ "$_ip" =~ $ip_cidr_regex ]]; then
+            invalidParam --filter $wanId $filterId src "$_ip" "Necessário um endereço CIDR IPv4 válido."
+          fi
+        done
+      fi
+
+      # dst
+      if [ "$dst" == "" ]; then
+        dst='!localnets'
+        # Definir endereço
+        setConfig --addToList "WANS[$wanId].filters[$filterId].dst" "$dst"
+      else
+        local _ip
+        for _ip in ${dst}; do
+          if ! [[ "$_ip" =~ $ip_cidr_regex ]]; then
+            invalidParam --filter $wanId $filterId dst "$_ip" "Necessário um endereço CIDR IPv4 válido."
+          fi
+        done
+      fi
+
+      # protocol
+      if grep -Eq '[[:upper:]]' <<< "$protocol"; then
+        protocol=${protocol,,}
+        # Valor obrigatoriamente deve ser minúsculo
+        setConfig --addToList "WANS[$wanId].filters[$filterId].protocol" "$protocol"
+      fi
+
+      if [ "$protocol" != "" ]; then
+        if ! [[ "$protocol" =~ $protocol_regex ]]; then
+          invalidParam --filter $wanId $filterId protocol "$protocol" "Valores válido: [all|tcp|udp|udplite|sctp|icmp|gre|esp|ah]."
+        fi
+
+        if [[ "$protocol" =~ $protocol_no_port_regex ]]; then
+          if [ "$sports" != "" ]; then
+            invalidParam --filter $wanId $filterId protocol "$protocol" "O protocolo não aceita definição de sports \"$sports\"."
+          fi
+
+          if [ "$dports" != "" ]; then
+            invalidParam --filter $wanId $filterId protocol "$protocol" "O protocolo não aceita definição de dports \"$dports\"."
+          fi
+        fi
+      elif [ "$sports" != "" ]; then
+        invalidParam --filter $wanId $filterId sports "$sports" "Não é possível definir sports sem definir protocolo. Defina um protocolo válido: [all|tcp|udp|udplite|sctp]."
+      elif [ "$dports" != "" ]; then
+        invalidParam --filter $wanId $filterId dports "$dports" "Não é possível definir dports sem definir protocolo. Defina um protocolo válido: [all|tcp|udp|udplite|sctp]."
+      fi
+
+      # portas
+      function checkPorts() {
+        local param="$1"
+        local ports="$2"
+
+        local port
+        for port in ${ports}; do
+          if [[ "$port" =~ $port_regex ]]; then
+            if [[ "$port" =~ ^([0-9]+):([0-9]+)$ ]]; then
+              local start_port="${BASH_REMATCH[1]}"
+              local end_port="${BASH_REMATCH[2]}"
+              if [ $start_port -ge $end_port ]; then
+                invalidParam --filter $wanId $filterId $param "$port" "Intervalo de portas inválido."
+              fi
+            fi
+          else
+            invalidParam --filter $wanId $filterId $param "$port" "Valores válidos: [0 até 65535 ou range N:N]."
+          fi
+        done
+      }
+
+      # sports
+      if [ "$sports" != "" ]; then
+        checkPorts sports "$sports"
+      fi
+
+      # dports
+      if [ "$dports" != "" ]; then
+        checkPorts dports "$dports"
+      fi
+
+    done
+
+    # Definir status do link
+    setStatusWan $wanId ON
+
+  done
+
+}
+
+function reorderWans(){
+  SETTINGS_YAML=$($YQ e '(.WANS |= sort_by(.orderFailover,.mark))' <<< "$SETTINGS_YAML")
+}
+
+# Dados dos links WANS
+function showWans(){
+
+  echo -e "\n$_TB_TOP"
+  echo -e "$_TB_LINE DADOS DOS LINKS"
+
+  local wanId
+  for wanId in $(getListIds WANS); do
+
+    local description=$(getConfig "WANS[$wanId].description")
+    local enabled=$(getConfig "WANS[$wanId].enabled")
+
+    echo -e "$_TB_INNER"
+    echo "$_TB_LINE"
+    echo "$_TB_LINE Descrição: $description"
+    echo "$_TB_LINE"
+
+    column -s'£' -t < <(
+      if [ "$enabled" == "true" ]; then
+        local mark=$(getConfig "WANS[$wanId].mark")
+        local note=$(getConfig "WANS[$wanId].note")
+        local orderFailover=$(getConfig "WANS[$wanId].orderFailover")
+        local iface=$(getConfig "WANS[$wanId].iface")
+        local ip=$(getConfig "WANS[$wanId].ip")
+        local mask=$(getConfig "WANS[$wanId].mask")
+        local gateway=$(getConfig "WANS[$wanId].gateway")
+        local dns=$(getConfig "WANS[$wanId].dns | join(\",\")")
+        local ping=$(getConfig "WANS[$wanId].ping | join(\",\")")
+        local filters=$(getListIds "WANS[$wanId].filters")
+
+        [ "$note" ] && echo "$_TB_LINE Nota:£$note"
+        echo "$_TB_LINE Ordem de Failover:£$orderFailover$( [ "$orderFailover" == "1" ] && echo " [Link Principal]" )"
+        echo "$_TB_LINE Interface:£$iface"
+        echo "$_TB_LINE IP:£$ip"
+        echo "$_TB_LINE Mascara de Rede:£$mask"
+        echo "$_TB_LINE Gateway:£$gateway"
+        echo "$_TB_LINE DNS(s):£$dns"
+        echo "$_TB_LINE Destino(s) de ping:£$ping"
+        echo "$_TB_LINE Marcação de pacotes:£$mark"
+
+        if [ "$filters" != "" ]; then
+
+          # Verificar se é o link principal, de ordem "1"
+          if [ "$orderFailover" == "1" ]; then
+
+            # Não imprimir os filtros do link principal, caso existam, pois não serão definidos
+            echo "$_TB_LINE Filtro(s):£Este link é a rota principal, os filtros definidos serão ignorados."
+
+          else
+
+            echo "$_TB_LINE Filtro(s):"
+
+            local filterId
+            for filterId in $filters; do
+
+              local filter_enabled=$(getConfig "WANS[$wanId].filters[$filterId].enabled")
+              local filter_description=$(getConfig "WANS[$wanId].filters[$filterId].description")
+
+              echo "$_TB_LINE   - Descrição:£$filter_description"
+              if [ "$filter_enabled" == "true" ]; then
+                local filter_note=$(getConfig "WANS[$wanId].filters[$filterId].note")
+                local chainMangle=$(getConfig "WANS[$wanId].filters[$filterId].chainMangle")
+                local src=$(getConfig "WANS[$wanId].filters[$filterId].src | join(\",\")")
+                local dst=$(getConfig "WANS[$wanId].filters[$filterId].dst | join(\",\")")
+                local protocol=$(getConfig "WANS[$wanId].filters[$filterId].protocol")
+                local sports=$(getConfig "WANS[$wanId].filters[$filterId].sports // [] | join(\",\")")
+                local dports=$(getConfig "WANS[$wanId].filters[$filterId].dports // [] | join(\",\")")
+
+                [ "$filter_note" ] && echo "$_TB_LINE       Nota:£$filter_note"
+                echo "$_TB_LINE       Mangle Chain:£$chainMangle"
+                [ "$src" != "0.0.0.0/0" ] && echo "$_TB_LINE       IP(s) de origem:£$src"
+                [ "$dst" != "0.0.0.0/0" ] && echo "$_TB_LINE       IP(s) de destino:£$dst"
+                [ "$protocol" ] && echo "$_TB_LINE       Protocolo:£$protocol"
+                [ "$sports" ] && echo "$_TB_LINE       Porta(s) de origem:£$sports"
+                [ "$dports" ] && echo "$_TB_LINE       Porta(s) de destino:£$dports"
+              else
+                echo "$_TB_LINE       Enabled:£false"
+              fi
+            done
+
+          fi
+
+        else
+          echo "$_TB_LINE Filtro(s):£-"
+        fi
+      else
+        echo "$_TB_LINE Enabled:£false"
+      fi
+    )
+  done
+
+  echo -e "$_TB_BOTTOM"
+
+}
+
+# Criar lista IPset de IP's
+function createListIP(){
+  local list=$1
+  local ips=$2
+
+  local result
+
+  if $IPSET list -name $list > /dev/null 2>&1; then
+    if result=$($IPSET flush ${list} 2>&1 >/dev/null); then
+      _success "Limpado lista de IP's ${list}."
+    else
+      # shellcheck disable=SC2001
+      _error "Falha na limpeza da lista de IP's ${list}:\n$(sed -e 's/ipset v[0-9\.]\+: //g' <<< "$result")"
+      die 1
+    fi
+  elif result=$($IPSET create $list -exist hash:net family inet maxelem 1024 2>&1 >/dev/null); then
+    _success "Criado lista de IP's $list."
+  else
+    # shellcheck disable=SC2001
+    _error "Falha ao criar lista de IP's $list:\n$(sed -e 's/ipset v[0-9\.]\+: //g' <<< "$result")"
+    die 1
+  fi
+
+  local ip=""
+  for ip in $ips; do
+    if result=$($IPSET add -exist $list $ip 2>&1 >/dev/null); then
+      # shellcheck disable=SC2001
+      _error "Não foi possível adicionar o endereço IP \"$ip\" na lista \"$list\":\n$(sed -e 's/ipset v[0-9\.]\+: //g' <<< "$result")"
+      die 1
+    fi
+  done
+
+}
+
+function setLocalnets(){
+  # Criar lista IPSET com redes locais
+  createListIP localnets "$LOCALNETS"
+}
+
+function setRouteTable(){
+  local opt=$1
+  local wanId=$2
+  local mark=$(getConfig "WANS[$wanId].mark")
+  local table="WAN${mark}"
+
+  # Removendo tabela de roteamento dos links WAN
+  local result=""
+  local status=""
+
+  result="$(sed -i "/[[:space:]]${table}$/d" /etc/iproute2/rt_tables 2>&1)"
+
+  status=$?
+
+  if [ "$opt" == "--delete" ]; then
+    if [ "$status" == "0" ]; then
+      _success "Removido tabela de roteamento \"$table\"."
+      return 0
+    else
+      _error "Falha ao remover tabela de roteamento \"$table\":\n$result"
+      return 1
+    fi
+  fi
+
+  # Criando tabela de roteamento dos links WAN
+  if [ "$opt" == "--add" ]; then
+    local result
+    if result=$( (echo "$mark $table" >> /etc/iproute2/rt_tables) 2>&1); then
+      _success "Criado tabela de roteamento \"$table\"."
+      return 0
+    else
+      _error "Falha ao criar tabela de roteamento \"$table\":\n$result"
+      return 1
+    fi
+  fi
+}
+
+function testRouteTable(){
+  local wanId=$1
+  local mark=$(getConfig "WANS[$wanId].mark")
+  local table="WAN${mark}"
+
+  if [ "$( grep -E "[[:space:]]${table}$)" /etc/iproute2/rt_tables | grep -E "^${mark}[[:space:]]+${table}$" )" != "" ]; then
+    if [ "$( grep -E "[[:space:]]${table}$" /etc/iproute2/rt_tables | grep -Ev "^${mark}[[:space:]]+${table}$)" )" == "" ]; then
+      # Tabela definida
+      return 0
+    else
+      _error "Há mais de uma definição de tabela de roteamento \"$table\"."
+      return 1
+    fi
+  else
+    _error "Tabela de roteamento \"$table\" não está definida."
+    return 1
+  fi
+}
+
+function setRouteTableGateway(){
+  local opt=$1
+  local wanId=$2
+  local mark=$(getConfig "WANS[$wanId].mark")
+  local gateway=$(getConfig "WANS[$wanId].gateway")
+  local table="WAN${mark}"
+
+  if [ "$opt" == "--add" ]; then
+    local result
+    if result=$(ip route replace default via $gateway table $table 2>&1); then
+      _success "Definido gateway \"$gateway\" da tabela de roteamento \"$table\"."
+      return 0
+    else
+      _error "Falha ao definir gateway \"$gateway\" da tabela de roteamento \"$table\":\n$result"
+      return 1
+    fi
+  else
+    local result
+    if result=$(ip route delete default table $table 2>&1); then
+      _success "Removido gateway \"$gateway\" da tabela de roteamento \"$table\""
+      return 0
+    else
+      _error "Falha ao remover gateway \"$gateway\" da tabela de roteamento \"$table\":\n$result"
+      return 1
+    fi
+  fi
+}
+
+function testRouteTableGateway(){
+  local wanId=$1
+  local mark=$(getConfig "WANS[$wanId].mark")
+  local gateway=$(getConfig "WANS[$wanId].gateway")
+  local table="WAN${mark}"
+
+  if [ "$(ip --json route show table $table default | $YQ '.[] | .gateway')" == "$gateway" ]; then
+    return 0
+  else
+    _error "Não está definido o gateway na tabela de roteamento \"$table\"."
+    return 1
+  fi
+}
+
+# Definir link como rota default
+function setDefaultGateway(){
+  local wanId=$1
+  local gateway=$(getConfig "WANS[$wanId].gateway")
+
+  local result
+  if result=$(ip route replace default via $gateway 2>&1); then
+    DEFAULT_GATEWAY=$wanId
+    _success "Definido rota padrão via \"$gateway\"."
+    return 0
+  else
+    _error "Falha ao definir rota padrão via \"$gateway\":\n$result"
+    return 1
+  fi
+}
+
+# Retornar WAN ID gateway padrão atual do sistema
+function getCurrentDefaultGateway(){
+
+  # Gateway atual do sistema
+  local gateway=$(ip --json route show default | $YQ '.[] | .gateway')
+
+  # WAN ID
+  local wanId=$($YQ ".WANS | to_entries | map(select(.value.gateway == \"$gateway\") | .key)" <<< "$SETTINGS_YAML")
+
+  [ "$wanId" == "[]" ] && return 1
+
+  echo $wanId
+
+}
+
+function setRulesTableRoute(){
+  local opt=$1
+  local wanId=$2
+
+  local ip=$(getConfig "WANS[$wanId].ip")
+  local mark=$(getConfig "WANS[$wanId].mark")
+  local table="WAN${mark}"
+
+  # Remove todas as regras definidas para a tabela
+  while [ "$(ip rule show table ${table})" != "" ]; do
+    ip rule delete table $table 2>/dev/null
+  done
+
+  if [ "$opt" == "--add" ]; then
+    local result
+    # IMPORTANTE: As regras devem ser aplicadas nessa ordem, primeiro pela origem, depois por marcação de pacotes.
+    if result=$(ip rule add from $ip table $table 2>&1 && ip rule add fwmark $mark table $table 2>&1); then
+      _success "Definido regras de roteamento[Origem: \"$ip\" e Marcação: \"$mark\"] da tabela de roteamento \"$table\"."
+      return 0
+    else
+      _error "Falha ao definir regras de roteamento[Origem: \"$ip\" e Marcação: \"$mark\"] da tabela de roteamento \"$table\":\n$result"
+      return 1
+    fi
+  else
+    _success "Removido regras de roteamento[Origem: \"$ip\" e Marcação: \"$mark\"] da tabela de roteamento \"$table\"."
+    return 0
+  fi
+}
+
+function testRulesTableRoute(){
+  local wanId=$1
+
+  local ip=$(getConfig "WANS[$wanId].ip")
+  local mark=$(getConfig "WANS[$wanId].mark")
+  local table="WAN${mark}"
+
+  local rules=$(ip rule show table $table)
+  local from_ip_count=$(grep -cE "from $ip lookup $table$" <<< "$rules")
+  local from_any_count=$(grep -cE "from [0-9\.\/]+ lookup $table$" <<< "$rules")
+  local fwmark_count=$(grep -cE "from all fwmark $mark lookup $table$" <<< "$rules")
+  local fwmark_any_count=$(grep -cE "from all fwmark .* lookup $table$" <<< "$rules")
+
+  if (( from_ip_count == 0 )); then
+    _error "A regra de roteamento por origem da tabela \"$table\" não está definida."
+    return 1
+  elif (( from_any_count > 1 )); then
+    _error "Existe mais de uma regra de roteamento por origem na tabela \"$table\"."
+    return 1
+  elif (( fwmark_count == 0 )); then
+    _error "A regra de roteamento por marcação de pacotes na tabela \"$table\" não está definida."
+    return 1
+  elif (( fwmark_any_count > 1 )); then
+    _error "Existe mais de uma regra de roteamento por marcação de pacotes na tabela \"$table\"."
+    return 1
+  fi
+
+  return 0
+}
+
+function setBasicFilters(){
+  local opt=$1
+
+  # Comentário das regras iptables
+  local comment="MULTIWANS_BASIC_MARK"
+
+  # Remove todos os filtros definidos
+  while iptables -t mangle -C PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$comment" -j CONNMARK --restore-mark 2> /dev/null; do
+    iptables -t mangle -D PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$comment" -j CONNMARK --restore-mark 2> /dev/null
+  done
+
+  while iptables -t mangle -C OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$comment" -j CONNMARK --restore-mark 2> /dev/null; do
+    iptables -t mangle -D OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$comment" -j CONNMARK --restore-mark 2> /dev/null
+  done
+
+  while iptables -t mangle -C POSTROUTING -m conntrack --ctstate NEW -m mark ! --mark 0x0 -m comment --comment "$comment" -j CONNMARK --save-mark 2> /dev/null; do
+    iptables -t mangle -D POSTROUTING -m conntrack --ctstate NEW -m mark ! --mark 0x0 -m comment --comment "$comment" -j CONNMARK --save-mark 2> /dev/null
+  done
+
+  if [ "$opt" == "--add" ]; then
+    local result
+
+    # Pacotes em PREROUTING com estados ESTABLISHED ou RELATED com marcação de pacotes CONNMARK definida, devem ter a marcação netfilter aplicada/restaurada
+    if result=$(iptables -t mangle -I PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$comment" -j CONNMARK --restore-mark 2>&1); then
+      # Pacotes em OUTPUT com estados ESTABLISHED ou RELATED com marcação de pacotes CONNMARK definida, devem ter a marcação netfilter aplicada/restaurada
+      if result=$(iptables -t mangle -I OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$comment" -j CONNMARK --restore-mark 2>&1); then
+        # Pacotes em POSTROUTING com estado NEW com marcação de pacotes netfilter definida, devem ter a marcação CONNMARK aplicada
+        if result=$(iptables -t mangle -I POSTROUTING -m conntrack --ctstate NEW -m mark ! --mark 0x0 -m comment --comment "$comment" -j CONNMARK --save-mark 2>&1); then
+          _success "Definido filtros básicos de marcação de pacotes iptables."
+          return 0
+        fi
+      fi
+    fi
+
+    _error "Falha ao definir filtros básicos de marcação de pacotes iptables:\n$result\nContatar equipe de infraestrutura!"
+    return 1
+  else
+    _success "Removido filtros básicos de marcação de pacotes iptables."
+    return 0
+  fi
+}
+
+function testBasicFilters(){
+  local wanId=$1
+
+  if iptables -t mangle -C PREROUTING -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$comment" -j CONNMARK --restore-mark 2> /dev/null; then
+    if iptables -t mangle -C OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$comment" -j CONNMARK --restore-mark 2> /dev/null; then
+      if iptables -t mangle -C POSTROUTING -m conntrack --ctstate NEW -m mark ! --mark 0x0 -m comment --comment "$comment" -j CONNMARK --save-mark 2> /dev/null; then
+        # Todos os filtros estão definidas
+        return 0
+      fi
+    fi
+  fi
+
+  _error "Alguns dos filtros básicos de marcação de pacotes iptables não estão definidos."
+  return 1
+}
+
+function setInputIptablesFilters(){
+  local opt=$1
+  local wanId=$2
+
+  local description=$(getConfig "WANS[$wanId].description")
+  local iface=$(getConfig "WANS[$wanId].iface")
+  local mark=$(getConfig "WANS[$wanId].mark")
+
+  # Formatar comentário
+  local comment="MULTIWANS_INPUT_$(sed -e 's/[[:space:]]/_/g' -e 's/.*/\U&/' <<< "$description")"
+
+  # Remove todos os filtros definidos
+  while iptables -t mangle -C PREROUTING -i $iface -m conntrack --ctstate NEW -m comment --comment "$comment" -j MARK --set-mark $mark 2> /dev/null; do
+    iptables -t mangle -D PREROUTING -i $iface -m conntrack --ctstate NEW -m comment --comment "$comment" -j MARK --set-mark $mark 2> /dev/null
+  done
+
+  if [ "$opt" == "--add" ]; then
+    local result=""
+
+    # Pacotes em PREROUTING entrando pela interface WAN com estado NEW, devem ter a marcação netfilter aplicada
+    if result=$(iptables -t mangle -I PREROUTING -i $iface -m conntrack --ctstate NEW -m comment --comment "$comment" -j MARK --set-mark $mark 2>&1); then
+      _success "Definido filtro INPUT \"$iface\" de marcação de pacotes iptables."
+      return 0
+    else
+      _error "Falha ao definir filtro INPUT \"$iface\" de marcação de pacotes iptables:\n$result\nContatar equipe de infraestrutura!"
+      return 1
+    fi
+  else
+    _success "Removido filtro INPUT \"$iface\" de marcação de pacotes iptables"
+    return 0
+  fi
+}
+
+function testInputFilters(){
+  local wanId=$1
+
+  local description=$(getConfig "WANS[$wanId].description")
+  local iface=$(getConfig "WANS[$wanId].iface")
+  local mark=$(getConfig "WANS[$wanId].mark")
+
+  # Formatar comentário
+  local comment="MULTIWANS_INPUT_$(sed -e 's/[[:space:]]/_/g' -e 's/.*/\U&/' <<< "$description")"
+
+  if ! iptables -t mangle -C PREROUTING -i $iface -m conntrack --ctstate NEW -m comment --comment "$comment" -j MARK --set-mark $mark 2> /dev/null; then
+    _error "O filtro INPUT de marcação de pacotes iptables não está definido."
+    return 1
+  fi
+}
+
+function conntrackDelete() {
+  local proto="$1"
+
+  # Os valores de src, dst, sports e dports, caso vazios, são definidos com "-"
+  # para garantir a criação de todas as combinações possíveis
+  local src="${2:--}"
+  local dst="${3:--}"
+  local sports="${4:--}"
+  local dports="${5:--}"
+
+  [ "$proto" ] && local _proto="-p $proto"
+
+  # Loop sobre todas as combinações possíveis de src, dst, sport e dport
+  local _src
+  for _src in ${src}; do
+    [ "${_src/-/}" ] && _src="-s $_src" || _src=""
+
+    local _dst
+    for _dst in ${dst}; do
+      [ "${_dst/-/}" ] && _dst="-d $_dst" || _dst=""
+
+      local _sport
+      for _sport in ${sports}; do
+        if [[ "$_sport" =~ ^([0-9]+):([0-9]+)$ ]]; then
+          local start_port="${BASH_REMATCH[1]}"
+          local end_port="${BASH_REMATCH[2]}"
+          _sport="sport=$($RGXG range $start_port $end_port) "
+        elif [ "${sport/-/}" ]; then
+          _sport="--sport $_sport "
+        else
+          _sport=""
+        fi
+
+        local _dport
+        for _dport in ${dports}; do
+          if [[ "$_dport" =~ ^([0-9]+):([0-9]+)$ ]]; then
+            local start_port="${BASH_REMATCH[1]}"
+            local end_port="${BASH_REMATCH[2]}"
+            _dport="dport=$($RGXG range $start_port $end_port) "
+          elif [ "${_dport/-/}" ]; then
+            _dport="--dport $_dport "
+          else
+            _dport=""
+          fi
+
+          local _ports=""
+          local _ports_regex=""
+          [[ "$_sport" =~ sport= ]] && _ports_regex="$_sport" || _ports+="$_sport"
+          [[ "$_dport" =~ dport= ]] && _ports_regex="$_dport" || _ports+="$_dport"
+
+          if [[ "$_ports_regex" == "" ]]; then
+            local result
+            if ! result=$($CONNTRACK -D $_proto $_src $_dst $_ports --mark 0 --src-nat 2>&1); then
+              if ! grep -q "0 flow entries have been deleted" <<< "$result"; then
+                _warning "Falha ao remover registros conntrack de conexões ($CONNTRACK -D $_proto $_src $_dst $_ports --mark 0 --src-nat):\n$result"
+              fi
+            fi
+          else
+            while IFS= read -r _params; do
+              $CONNTRACK -D $_params --mark 0 --src-nat 2> /dev/null
+              if ! result=$($CONNTRACK -D $_proto $_src $_dst $_ports --mark 0 --src-nat 2>&1); then
+                if ! grep -q "0 flow entries have been deleted" <<< "$result"; then
+                  _warning "Falha ao remover registros conntrack de conexões ($CONNTRACK -D $_params --mark 0 --src-nat):\n$result"
+                fi
+              fi
+            done < <(
+              $CONNTRACK -L $_proto $_src $_dst $_ports --mark 0 --src-nat 2> /dev/null | \
+                # OBS: incluir '.*sport=' para que a regex seja aplicada apenas na primeira ocorrência de sport e dport
+                grep -E "$_ports_regex.*sport=" | \
+                awk \
+                  'BEGIN {
+                    extract_proto = ("'"$_proto"'" != "");
+                    extract_src = ("'"$_src"'" != "");
+                    extract_dst = ("'"$_dst"'" != "");
+                    extract_sport = ("'"$_sport"'" != "");
+                    extract_dport = ("'"$_dport"'" != "");
+                  }
+                  {
+                    proto = ""; src = ""; dst = ""; sport = ""; dport = "";
+                    for (i=1; i<=NF; i++) {
+                      if (extract_proto && i == 1) proto = $1
+                      if (extract_src && $i ~ /^src=/) src = substr($i, 5)
+                      if (extract_dst && $i ~ /^dst=/) dst = substr($i, 5)
+                      if (extract_sport && $i ~ /^sport=/) sport = substr($i, 7)
+                      if (extract_dport && $i ~ /^dport=/) {
+                        dport = substr($i, 7)
+                        break  # Parar iteração na linha
+                      }
+                    }
+                    output = ""
+                    if (extract_proto && proto != "") output = output " -p " proto
+                    if (extract_src && src != "") output = output " -s " src
+                    if (extract_dst && dst != "") output = output " -d " dst
+                    if (extract_sport && sport != "") output = output " --sport " sport
+                    if (extract_dport && dport != "") output = output " --dport " dport
+                    if (output != "") print output
+                  }' | \
+                sort -u
+            )
+          fi
+        done
+      done
+    done
+  done
+}
+
+function setIptablesFilters(){
+  local opt=$1
+  local wanId=$2
+
+  local description=$(getConfig "WANS[$wanId].description")
+  local iface=$(getConfig "WANS[$wanId].iface")
+  local mark=$(getConfig "WANS[$wanId].mark")
+
+  # Número total de filtros
+  local total=0
+
+  # Número total de filtros aplicados
+  local applied=0
+
+  local filterId
+  for filterId in $(getListIds "WANS[$wanId].filters"); do
+
+    local filter_enabled=$(getConfig "WANS[$wanId].filters[$filterId].enabled")
+
+    [ "$filter_enabled" == "false" ] && continue
+
+    local filter_description=$(getConfig "WANS[$wanId].filters[$filterId].description")
+    local filter_note=$(getConfig "WANS[$wanId].filters[$filterId].note")
+    local chainMangle=$(getConfig "WANS[$wanId].filters[$filterId].chainMangle")
+    local src=$(getConfig "WANS[$wanId].filters[$filterId].src")
+    local dst=$(getConfig "WANS[$wanId].filters[$filterId].dst")
+    local protocol=$(getConfig "WANS[$wanId].filters[$filterId].protocol")
+    local sports=$(getConfig "WANS[$wanId].filters[$filterId].sports")
+    local dports=$(getConfig "WANS[$wanId].filters[$filterId].dports")
+
+    ((total++))
+
+    # Formatar comentário
+    local comment="MULTIWANS_MARK_$(sed -e 's/[[:space:]]/_/g' -e 's/.*/\U&/' <<< "${description}_${filter_description}")"
+
+    local _src="-s $src"
+
+    local _dst
+    if [ "$dst" == '!localnets' ]; then
+      # Remove a string "!localnets" para processamento posterior por conntrackDelete()
+      dst=""
+      _dst='-m set --match-set !localnets dst'
+    else
+      _dst="-s $dst"
+    fi
+
+    [ "$protocol" ] && local _protocol="-p $protocol"
+
+    local _sports
+    if [ "$sports" != "" ]; then
+      if grep -q '\,' <<< "$sports"; then
+        _sports="-m multiport --sport $sports"
+      else
+        _sports="--sport $sports"
+      fi
+    fi
+
+    local _dports
+    if [ "$dports" != "" ]; then
+      if grep -q '\,' <<< "$dports"; then
+        _dports="-m multiport --dport $dports"
+      else
+        _dports="--dport $dports"
+      fi
+    fi
+
+    local num_rule
+    for num_rule in $($IPTABLES -t mangle -n --line-numbers -L $chainMangle 2> /dev/null | grep "\/\*\ $comment\ \*\/" | awk '{print $1}' | sort -nr); do
+      iptables -t mangle -D $chainMangle $num_rule 2> /dev/null
+    done
+
+    if [ "$opt" == "--add" ]; then
+      local result
+      if result=$(iptables -t mangle -A $chainMangle $_src $_dst $_protocol $_sports $_dports -m comment --comment "$comment" -j MARK --set-mark $mark 2>&1); then
+        _success "Definido filtro iptables de redirecionamento de tráfego \"$filter_description\"."
+        ((applied++))
+      else
+        _error "Falha ao definir filtro iptables de redirecionamento de tráfego \"$filter_description\":\n$result"
+      fi
+    else
+      _success "Removido filtro iptables de redirecionamento de tráfego \"$filter_description\"."
+      ((applied++))
+    fi
+
+  done
+
+  if [ $total -eq 0 ] || [ $applied -eq 0 ]; then
+    if [ "$opt" == "--add" ]; then
+      _error "Nenhum filtro iptables de redirecionamento de tráfego (mark: $mark) foi adicionado.\nDefinição OBRIGATÓRIA para o funcionamento do link!\nContatar equipe de infraestrutura!"
+    else
+      _error "Nenhum filtro iptables de redirecionamento de tráfego (mark: $mark) foi removido.\nContatar equipe de infraestrutura!"
+    fi
+    return 1
+  elif [ $applied -lt $total ]; then
+    # Houve pelo menos um erro no processamento dos filtros
+    # Não será retornado código negativo(1), mas irá gerar alertas para a ocorrência de erros
+    _warning "Alguns filtros iptables de redirecionamento de tráfego (mark: $mark) não foram $([ "$opt" == "--add" ] && echo 'adicionados' || echo 'removidos').\nContatar equipe de infraestrutura!"
+  fi
+
+  if [ "$opt" == "--add" ]; then
+    # Remove registros conntrack que estejam vinculados a rota padrão (mark=0)
+    # TODO: Incrementar testes de erros
+    conntrackDelete "$protocol" "$src" "$dst" "$sports" "$dports"
+  else
+    # Remove registros conntrack que estejam vinculados ao link WAN
+    local result
+    if result=$($CONNTRACK -D --mark $mark 2>&1); then
+      _success "Removido registros conntrack de conexões (mark: $mark)."
+    else
+      if grep -q "0 flow entries have been deleted" <<< "$result"; then
+        _info "Nenhum registro conntrack de conexões (mark: $mark) para ser excluído."
+      else
+        _warning "Falha ao remover registros conntrack de conexões (mark: $mark):\n$result"
+      fi
+    fi
+  fi
+
+  # No mínimo uma regra foi adiciona/removida corretamente
+  return 0
+}
+
+function testIptablesFilters(){
+  local wanId=$1
+
+  local description=$(getConfig "WANS[$wanId].description")
+  local iface=$(getConfig "WANS[$wanId].iface")
+  local mark=$(getConfig "WANS[$wanId].mark")
+
+  # Número total de filtros
+  local total=0
+
+  # Número total de filtros aplicados
+  local applied=0
+
+  local filterId
+  for filterId in $(getListIds "WANS[$wanId].filters"); do
+
+    local filter_enabled=$(getConfig "WANS[$wanId].filters[$filterId].enabled")
+
+    [ "$filter_enabled" == "false" ] && continue
+
+    local filter_description=$(getConfig "WANS[$wanId].filters[$filterId].description")
+    local filter_note=$(getConfig "WANS[$wanId].filters[$filterId].note")
+    local chainMangle=$(getConfig "WANS[$wanId].filters[$filterId].chainMangle")
+    local src=$(getConfig "WANS[$wanId].filters[$filterId].src")
+    local dst=$(getConfig "WANS[$wanId].filters[$filterId].dst")
+    local protocol=$(getConfig "WANS[$wanId].filters[$filterId].protocol")
+    local sports=$(getConfig "WANS[$wanId].filters[$filterId].sports")
+    local dports=$(getConfig "WANS[$wanId].filters[$filterId].dports")
+
+    ((total++))
+
+    # Formatar comentário
+    local comment="MULTIWANS_MARK_$(sed -e 's/[[:space:]]/_/g' -e 's/.*/\U&/' <<< "${description}_${filter_description}")"
+
+    local _src="-s $src"
+
+    local _dst
+    if [ "$dst" == "!localnets" ]; then
+      _dst="-m set ! --match-set localnets dst"
+    else
+      _dst="-s $dst"
+    fi
+
+    [ "$protocol" ] && local _protocol="-p $protocol"
+
+    local _sports
+    if [ "$sports" != "" ]; then
+      if grep -q '\,' <<< "$sports"; then
+        _sports="-m multiport --sport $sports"
+      else
+        _sports="--sport $sports"
+      fi
+    fi
+
+    local _dports
+    if [ "$dports" != "" ]; then
+      if grep -q '\,' <<< "$dports"; then
+        _dports="-m multiport --dport $dports"
+      else
+        _dports="--dport $dports"
+      fi
+    fi
+
+    if iptables -t mangle -C $chainMangle $_src $_dst $_protocol $_sports $_dports -m comment --comment "$comment" -j MARK --set-mark $mark 2> /dev/null; then
+      ((applied++))
+    fi
+
+  done
+
+  if [ $total -eq 0 ] || [ $applied -eq 0 ]; then
+    _error "Nenhum filtro iptables de redirecionamento de tráfego (mark: $mark) está definido.\nDefinição OBRIGATÓRIA para o funcionamento do link!\nContatar equipe de infraestrutura!"
+    return 1
+  elif [ $applied -lt $total ]; then
+    _warning "Algum(s) filtro(s) iptables de redirecionamento de tráfego (mark: $mark) não está(ão) definido(s).\nContatar equipe de infraestrutura!"
+    return 1
+  fi
+
+  # Todas os filtros estão definidos corretamente
+  return 0
+
+}
+
+function restartIface(){
+  local wanId=$1
+
+  local iface=$(getConfig "WANS[$wanId].iface")
+
+  local result
+
+  if result=$(ifdown --force --ignore-errors $iface 2>&1); then
+    _success "Parado interface de rede \"$iface\"."
+  else
+    _error "Falha ao parar interface de rede \"$iface\":\n$result"
+  fi
+
+  if result=$(ifup --force --ignore-errors  $iface 2>&1); then
+    _success "Iniciado interface de rede \"$iface\"."
+    return 0
+  else
+    _error "Falha ao iniciar interface de rede \"$iface\":\n$result"
+    return 1
+  fi
+}
+
+function testIfaceAvailable(){
+  local wanId=$1
+  local iface=$(getConfig "WANS[$wanId].iface")
+
+  if ! ip link show dev $iface > /dev/null 2>&1; then
+    _error "A interface de rede \"$iface\" está desconectada fisicamente ou sem drivers no sistema."
+    return 1
+  fi
+}
+
+function testIfaceEnabled(){
+  local wanId=$1
+  local iface=$(getConfig "WANS[$wanId].iface")
+
+  if [ "$(ip link show dev $iface up)" == "" ]; then
+    _error "A interface de rede \"$iface\" está desativada no sistema."
+    return 1
+  fi
+}
+
+function testIfaceConnection(){
+  local wanId=$1
+  local iface=$(getConfig "WANS[$wanId].iface")
+
+  if [ "$(cat /sys/class/net/$iface/carrier 2>&1)" != "1" ]; then
+    _error "A interface de rede \"$iface\" está com o cabo de rede desconectado ou sem sinal."
+    return 1
+  fi
+}
+
+function testIfaceConfiguration(){
+  local wanId=$1
+  local iface=$(getConfig "WANS[$wanId].iface")
+  local ip=$(getConfig "WANS[$wanId].ip")
+  local mask=$(getConfig "WANS[$wanId].mask")
+
+  local json_output=$(ip -json addr show dev $iface)
+  local current_ip=$($YQ '.[] | .addr_info[] | select(.family == "inet") | .local' <<< "$json_output")
+  local current_mask=$($YQ '.[] | .addr_info[] | select(.family == "inet") | .prefixlen' <<< "$json_output")
+
+  if [ "$current_ip" == "" ]; then
+    _error "A interface de rede \"$iface\" está desconfigurada.\nContatar equipe de infraestrutura!"
+    return 1
+  elif [ "${current_ip}/${current_mask}" != "${ip}/${mask}" ]; then
+    _error "A interface de rede \"$iface\" está com as configurações fora das definições.\nConfigurações atual: ${current_ip}/${current_mask}.\nContatar equipe de infraestrutura!"
+    return 1
+  fi
+}
+
+# Resolver endereços, pesquisando em todos os servidores de DNS disponíveis
+function dns(){
+  local address=$1
+
+  # Verificar se o endereço passado por parâmetro é um IP ou URL.
+  # Se for IP ele retorna o mesmo como resultado final, se não continua no processamento da URL
+  local ip_regex="^(([0-9]{1,2}|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.){3}([0-9]{1,2}|1[0-9][0-9]|2[0-4][0-9]|25[0-5])$"
+  if [[ $address =~ $ip_regex ]]; then
+    echo "$address"
+    return 0
+  fi
+
+  local wanId
+  for wanId in $(getListIds WANS); do
+
+    local enabled=$(getConfig "WANS[$wanId].enabled")
+
+    [ "$enabled" == "false" ] && continue
+
+    local status=$(getConfig "WANS[$wanId].status")
+
+    [ "$status" == "OFF" ] && continue
+
+    local orderFailover=$(getConfig "WANS[$wanId].orderFailover")
+
+    # Links WAN com ordem de falha desabilitado, são isolados com tráfegos específicos e não são utilizados como failover.
+    # Portanto não devem ser utilizados para realizar consultas de DNS
+    [ "$orderFailover" == "disabled" ] && continue
+
+    local dns=$(getConfig "WANS[$wanId].dns")
+    local ip=$(getConfig "WANS[$wanId].ip")
+
+    # Tentativa de resolução de nome nos servidores DNS
+    for server_dns in ${dns//,/\ }; do
+
+      #####################################################################################################################################
+      # O comando abaixo captura a saída do comando dig, retira as linhas que contém o ip do servidor DNS responsável pela pesquisa;
+      # acrescenta ao final de cada linha o carácter ":" e o endereço do servidor DNS. Acrescentar o DNS no final
+      # serve para identificar mais tarde que servidor resolveu o endereço.
+      # A opção "-b" do comando dig é primordial para identificar por qual link a pesquisa será feita.
+      # Caso o endereço do servidor DNS seja o localhost(127.0.0.1), a opção "-b" será ignorada.
+      #####################################################################################################################################
+
+      if [ "$server_dns" == "127.0.0.1" ]; then
+        local result=$(dig @${server_dns} $address A +tries=$DNS_RETRY +time=$DNS_TIMEOUT +short | grep -v ';\|^$' | sed "s/$/:${server_dns}/g")
+      else
+        local result=$(dig @${server_dns} -b $ip $address A +tries=$DNS_RETRY +time=$DNS_TIMEOUT +short | grep -v ';\|^$' | sed "s/$/:${server_dns}/g")
+      fi
+
+      # Se o endereço foi resolvido, o sistema retorna os IP(s) e DNS.
+      # Se não, o sistema passa para a próxima entrada de servidor DNS.
+      if [ "$result" != "" ]; then
+        echo "$result"
+        return 0
+      fi
+    done
+  done
+
+  # Em caso de falha
+  _error "Não foi possível resolver o endereço \"$address\" em nenhum servidor DNS."
+  return 1
+}
+
+# Teste de conectividade com a internet
+function testPing() {
+  local wanId="$1"
+  local wanIp=$(getConfig "WANS[$wanId].ip")
+  local wanPing=$(getConfig "WANS[$wanId].ping")
+
+  for address in ${wanPing}; do
+    local dnsResult
+    dnsResult=$(dns "$address") || continue
+
+    while IFS=: read -r ip dns; do
+      if pingResult=$(ping -I "$wanIp" -q -c "$PING_COUNT" -W "$PING_TIMEOUT" "$ip" 2>&1); then
+        if [ "$dns" ]; then
+          _success "Ping em ${address} (${ip}). DNS via ${dns}."
+        else
+          _success "Ping em ${ip}."
+        fi
+        return 0
+      else
+        pingResult=$(grep -Eiv 'ping|^[[:space:]]*$' <<< "$pingResult")
+        if [ "$dns" ]; then
+          _error "Falha de ping em ${address} (${ip}). DNS via ${dns}:\n${pingResult}"
+        else
+          _error "Falha de ping em ${ip}:\n${pingResult}"
+        fi
+      fi
+    done <<< "$dnsResult"
+  done
+  return 1
+}
+
+# Definir status de WAN
+function setStatusWan(){
+  local wanId="$1"
+  local status="$2"
+
+  local current_status=$(getConfig "WANS[$wanId].status")
+  local iface=$(getConfig "WANS[$wanId].iface")
+
+  # Registra mudança de status em variável global
+  [ "$current_status" != "$status" ] && WANS_STATE_CHANGE=true
+
+  setConfig "WANS[$wanId].status" "$status"
+
+  # Atualizar ou adicionar status da interface no arquivo de status
+  if grep -qE "^${iface}:" "$DAEMON_STATUS_FILE" 2>/dev/null; then
+    sed -i "s/^${iface}:.*/${iface}:${status}/" "$DAEMON_STATUS_FILE"
+  else
+    echo "${iface}:${status}" >> "$DAEMON_STATUS_FILE"
+  fi
+}
+
+# Definir WAN com status "OFF"
+function setOffWan(){
+  local wanId=$1
+  local description=$(getConfig "WANS[$wanId].description")
+  local orderFailover=$(getConfig "WANS[$wanId].orderFailover")
+  local message="${2:-O link \"$description\" está OFFLINE.\nContatar equipe de infraestrutura!}"
+
+  setStatusWan $wanId OFF
+
+  # Link principal(orderFailover=1) não possui marcação de pacotes iptables
+  if [ "$orderFailover" != "1" ]; then
+    setIptablesFilters --delete $wanId
+  fi
+
+  _error "$message"
+}
+
+function startDaemon(){
+  if ! status_exec; then
+    echo -e "${ICON_ERROR} ERROR: O daemon ($$) já está em execução.\nO PID do processo em execução é ($(pidof -o $$ -o $PPID -o %PPID -x $SCRIPTNAME 2>&1))." >&2
+    exit 1
+  fi
+
+  if ! [ "$CONNTRACK" ]; then
+    echo -e "${ICON_ERROR} ERROR: A ferramenta auxiliar \"conntrack\" não está instalada." >&2
+    exit 1
+  fi
+
+  if ! [ "$IPSET" ]; then
+    echo -e "${ICON_ERROR} ERROR: A ferramenta auxiliar \"ipset\" não está instalada." >&2
+    exit 1
+  fi
+
+  if ! [ "$CURL" ]; then
+    echo -e "${ICON_ERROR} ERROR: A ferramenta auxiliar \"curl\" não está instalada." >&2
+    exit 1
+  fi
+
+  if ! [ "$RGXG" ]; then
+    echo -e "${ICON_ERROR} ERROR: A ferramenta auxiliar \"rgxg\" não está instalada." >&2
+    exit 1
+  fi
+
+  if ! [ "$SENDEMAIL" ]; then
+    echo -e "${ICON_ERROR} ERROR: A ferramenta auxiliar \"sendEmail\" não está instalada." >&2
+    exit 1
+  fi
+
+  # Definir ação do script para assunto do e-mail
+  ACTION_SUBJECT="START"
+
+  # Apagar variável de registro de info para envio por e-mail
+  unset LOG_MESSAGE
+
+  installYq
+  loadSettings
+  validAndSetConfig
+  setLocalnets
+  reorderWans
+
+  info "$(header)"
+
+  info "\n$_TB_TOP"
+  info "$_TB_LINE Iniciando script MultiWans"
+  info "$_TB_BOTTOM"
+
+  # Variável global responsável por identificar gateway padrão definido
+  DEFAULT_GATEWAY=""
+
+  local wanId
+  for wanId in $(getListIds WANS); do
+
+    local enabled=$(getConfig "WANS[$wanId].enabled")
+    local description=$(getConfig "WANS[$wanId].description")
+    local orderFailover=$(getConfig "WANS[$wanId].orderFailover")
+
+    info "\n$_TB_TOP"
+    info "$_TB_LINE Configurando link $description"
+    info "$_TB_BOTTOM"
+
+    function setConfigWan() {
+      if [ "$enabled" == "false" ]; then
+        _warning "O link está DESATIVADO."
+        return 0
+      fi
+
+      testIfaceAvailable $wanId || return 1
+      testIfaceEnabled $wanId || restartIface $wanId || return 1
+      testIfaceConnection $wanId || return 1
+      testIfaceConfiguration $wanId || return 1
+
+      if [ "$orderFailover" != "" ] && [ "$DEFAULT_GATEWAY" == "" ]; then
+        if [ "$(getCurrentDefaultGateway)" == "$wanId" ]; then
+          DEFAULT_GATEWAY=$wanId
+          _info "O link já está declarado como rota padrão no sistema."
+        elif ! setDefaultGateway $wanId; then
+          return 1
+        fi
+      fi
+
+      ! setRouteTable --add $wanId && [ "$DEFAULT_GATEWAY" != "$wanId" ] && return 1 || return 0
+
+      ! setRouteTableGateway --add $wanId && [ "$DEFAULT_GATEWAY" != "$wanId" ] && return 1 || return 0
+
+      ! setFromLocalRuleTableRoute --add $wanId && [ "$DEFAULT_GATEWAY" != "$wanId" ] && return 1 || return 0
+
+      ! setRulesTableRoute --add $wanId && [ "$DEFAULT_GATEWAY" != "$wanId" ] && return 1 || return 0
+
+      setInputIptablesFilters --add $wanId
+
+      # Link principal(orderFailover=1) ou link de rota padrão não possuem filtros de marcação de pacotes iptables
+      [ "$orderFailover" == "1" ] || [ "$DEFAULT_GATEWAY" == "$wanId" ] && return 0
+
+      setIptablesFilters --add $wanId || return 1
+
+      return 0
+    }
+
+    setConfigWan || setOffWan $wanId
+
+  done
+
+  [ "$DEFAULT_GATEWAY" == "" ] && _error "TODOS os links de internet encontram-se OFFLINE.\nContatar equipe de infraestrutura!"
+
+  # Limpa o cache das tabelas de roteamento
+  ip route flush cache
+
+  info "$(showWans)"
+  info "$(runtime)"
+  info "$(footer)"
+  mail "START"
+
+  # Apaga variável de registro de info para envio por e-mail
+  unset LOG_MESSAGE
+
+}
+
+function stopDaemon(){
+  # Definir início de execução de script
+  local START_TIME=$(date +%s);
+
+  # Variável utilizada no registro de info do sistema
+  local LOG_TIME=$(date +%Y%m%d%H%M%S -d @$START_TIME)
+
+  # Variável utilizada em mensagens para usuário
+  local SHOW_TIME=$(date +%d/%m/%Y\ %H:%M:%S -d @$START_TIME)
+
+  # Definir ação do script para assunto do e-mail
+  ACTION_SUBJECT="STOP"
+
+  # Apaga variável de registro de info para envio por e-mail
+  unset LOG_MESSAGE
+
+  info "$(header)"
+
+  info "\n$_TB_TOP"
+  info "$_TB_LINE Parando script MultiWans"
+  info "$_TB_BOTTOM"
+
+  local messageDefaultGateway
+
+  local wanId
+  for wanId in $(getListIds WANS); do
+    local enabled=$(getConfig "WANS[$wanId].enabled")
+
+    if [ "$enabled" == "false" ]; then
+      continue
+    fi
+
+    local description=$(getConfig "WANS[$wanId].description")
+    local orderFailover=$(getConfig "WANS[$wanId].orderFailover")
+    local status=$(getConfig "WANS[$wanId].status")
+
+    info "\n$_TB_TOP"
+    info "$_TB_LINE Removendo configuração do link $description"
+    info "$_TB_BOTTOM"
+
+    # Link principal(orderFailover=1) e link de rota padrão não possuem filtros de marcação de pacotes iptables
+    if [ "$orderFailover" != "1" ] || [ "$DEFAULT_GATEWAY" != "$wanId" ]; then
+      setIptablesFilters --delete $wanId
+    fi
+
+    setInputIptablesFilters --delete $wanId
+
+    setRulesTableRoute --delete $wanId
+
+    setRouteTableGateway --delete $wanId
+
+    setRouteTable --delete $wanId
+
+    [ "$status" == "OFF" ] && continue
+
+    if [ "$DEFAULT_GATEWAY" == "$wanId" ]; then
+      messageDefaultGateway="${description}[$gateway]"
+      continue
+    fi
+
+    [ "$orderFailover" == "disabled" ] && continue
+
+    testIfaceAvailable $wanId || continue
+    testIfaceEnabled $wanId || restartIface $wanId || continue
+    testIfaceConnection $wanId || continue
+    testIfaceConfiguration $wanId || continue
+
+    setDefaultGateway $wanId
+  done
+
+  if [ "$messageDefaultGateway" ]; then
+    _info "Rota padrão atual: $messageDefaultGateway."
+  else
+    _error "Nenhuma rota padrão definida no sistema.\nContatar equipe de infraestrutura!"
+  fi
+
+  # Limpa o cache das tabelas de roteamento
+  ip route flush cache
+
+  # Remover arquivo de status de links
+  rm -f $DAEMON_STATUS_FILE 2> /dev/null
+
+  info "$(showWans)"
+  info "$(runtime)"
+  info "$(footer)"
+  mail "STOP"
+
+  # Apaga variável de registro de info para envio por e-mail
+  unset LOG_MESSAGE
+}
+
+function testWans(){
+
+  # Definir início de execução de script
+  local START_TIME=$(date +%s);
+
+  # Variável utilizada no registro de info do sistema
+  local LOG_TIME=$(date +%Y%m%d%H%M%S -d @$START_TIME)
+
+  # Variável utilizada em mensagens para usuário
+  local SHOW_TIME=$(date +%d/%m/%Y\ %H:%M:%S -d @$START_TIME)
+
+  # Apaga variável de registro de info para envio por e-mail
+  unset LOG_MESSAGE
+
+  # Variável global que defini mudança de status dos links
+  WANS_STATE_CHANGE=false
+
+  # Variável responsável por identificar se gateway padrão foi definido
+  local isSetDefaultGateway=false
+
+  # Identifica o gateway atual antes de iniciar os testes
+  local startingDefaultGateway=$DEFAULT_GATEWAY
+
+  local wanId
+  for wanId in $(getListIds WANS); do
+
+    local enabled=$(getConfig "WANS[$wanId].enabled")
+
+    [ "$enabled" == "false" ] && continue
+
+    local description=$(getConfig "WANS[$wanId].description")
+    local orderFailover=$(getConfig "WANS[$wanId].orderFailover")
+    local startingStatus=$(getConfig "WANS[$wanId].orderFailover")
+
+    info "\n$_TB_TOP"
+    info "$_TB_LINE Monitorando link $description"
+    info "$_TB_BOTTOM"
+
+    function testWan() {
+      testIfaceAvailable $wanId || return 1
+      testIfaceEnabled $wanId || { setStatusLink $wanId OFF; restartIface $wanId; } || return 1
+      testIfaceConnection $wanId || return 1
+      testIfaceConfiguration $wanId || return 1
+
+      testRouteTable $wanId || { setStatusLink $wanId OFF; setRouteTable --add $wanId; } || return 1
+
+      testRouteTableGateway $wanId || { setStatusLink $wanId OFF; setRouteTableGateway --add $wanId; } || return 1
+
+      testRulesTableRoute $wanId || { setStatusLink $wanId OFF; setRulesTableRoute --add $wanId; } || return 1
+
+      testInputIptablesFilters $wanId || { setStatusLink $wanId OFF; setInputIptablesFilters --add $wanId; } || return 1
+
+      testPing $wanId || return 1
+    }
+
+    testWan || { setOffWan "$wanId"; continue; }
+
+    ########################################################################
+    # O link está ONLINE.
+    # Deve-se realizar teste de definição de rota padrão e regras iptables.
+    ########################################################################
+
+    # Link sem order de failover não pode ser definido como rota padrão
+    if [ "$orderFailover" == "disabled" ] && [ "$isSetDefaultGateway" == "false" ]; then
+
+      if [ "$DEFAULT_GATEWAY" == "$wanId" ]; then
+        if [ "$(getCurrentDefaultGateway)" == "$wanId" ]; then
+          isSetDefaultGateway=true
+          continue
+        else
+          # A rota padrão atual está diferente da definição do sistema, portanto o link atualmente está OFFLINE
+          setStatusLink $wanId OFF
+        fi
+      fi
+
+      if setDefaultGateway $wanId; then
+        isSetDefaultGateway=true
+
+        if [ "$orderFailover" != "1" ]; then
+          # Remove regras de marcação de pacotes do iptables
+          if ! setIptablesFilters --delete $wanId; then
+            # Não é necessário registrar o erro em setOffLink(), pois este erro não deixa o link OFFLINE,
+            # pois o mesmo já foi definido como rota padrão.
+            _error "Verifique os logs acima e contatar equipe de infraestrutura!"
+          fi
+        fi
+
+        if [ "$startingStatus" == "OFF" ]; then
+
+          # Limpa o cache das tabelas de roteamento
+          ip route flush cache
+
+          # Definir status do link
+          setStatusWan $wanId ON
+
+          _success "O link \"$description\" está ONLINE, seu serviço foi reestabelecido com sucesso!"
+        fi
+
+        continue
+      else
+        if [ "$orderFailover" == "1" ]; then
+          setOffWan $wanId "O link \"$description\" está ONLINE mas não foi possível ativar o serviço.\nVerifique os logs acima e contatar equipe de infraestrutura!"
+          continue
+        else
+          _error "Verifique os logs acima e Contatar equipe de infraestrutura!"
+        fi
+      fi
+    fi
+
+    ####################################################################################
+    ## Caso o link não seja definido como rota padrão, executa-se as análises abaixo:
+    ####################################################################################
+
+    # Verifica se o link foi a última rota padrão
+    # Se foi o último não realiza o teste de regras do iptables, pois a definição de regras será
+    # obrigatório para o mesmo e isso não identifica que o link estava OFFLINE.
+    if [ "$startingDefaultGateway" != "$wanId" ]; then
+
+      # Verifica se regras de marcação de pacotes do iptables estão definidas, caso não, marcar o link como offline
+      if ! testRuleIptables $wanId; then
+
+        # Aplica regras de marcação de pacotes do iptables
+        if setIptablesFilters --add $wanId; then
+          if [ "$startingStatus" == "OFF" ]; then
+
+            # Limpa o cache das tabelas de roteamento
+            ip route flush cache
+
+            # Definir status do link
+            setStatusWan $wanId ON
+
+            _error "O link \"$description\" está ONLINE, seu serviço foi reestabelecido com sucesso!"
+          fi
+        else
+          setOffWan $wanId "O link \"$description\" está ONLINE mas não foi possível ativar o serviço.\nVerifique os logs acima e contatar equipe de infraestrutura!"
+        fi
+
+      fi
+
+    fi
+
+  done
+
+  # Variável que define envio de e-mail. O valor definido será o assunto do e-mail.
+  # Valor="NONE" -> Não envia
+  # Valor="<qualquer outro valor>" -> Envia e-mail
+  local sendMail="NONE"
+
+  # Verifica se há erros na mensagem de log
+  # OBS: Utilizado regex para que possíveis logs de auditoria não capturem a palavra ERROR
+  #      e acabem gerando falso positivo em alertas.
+  if grep -q '[E][R][R][O][R]:' <<< "$LOG_MESSAGE"; then
+    # Inicializa COUNT_ERROR se não estiver definido
+    COUNT_ERROR=${COUNT_ERROR:-0}
+
+    if [ "$WANS_STATE_CHANGE" == "true" ] || [ $COUNT_ERROR -lt $ALERTS_MAX ] || [ $((COUNT_ERROR % ALERTS_RESEND)) -eq 0 ]; then
+      sendMail="ERROR"
+    else
+      for ((n=1; n<ALERTS_MAX; n++)); do
+        if [ $(((COUNT_ERROR - n) % ALERTS_RESEND)) -eq 0 ]; then
+          sendMail="ERROR"
+          break
+        fi
+      done
+    fi
+
+    ((COUNT_ERROR++))  # Incrementa número de erros
+  elif [[ "$WANS_STATE_CHANGE" == "true" ]]; then
+    sendMail="WARNING"
+  else
+    COUNT_ERROR=0  # Zera contador de erros
+  fi
+
+  # Envia e-mail se necessário
+  if [[ "$sendMail" != "NONE" ]]; then
+    LOG_MESSAGE="$(header)${LOG_MESSAGE}$(showWans footer)"
+    mail "$sendMail"
+  fi
+
+  unset LOG_MESSAGE  # Limpa variável após envio
+}
+
+###############################################################################################################
+# Main Script
+###############################################################################################################
+
+# Tratamento de sinais enviados ao processo do script
+# SIGINT: Interromper processo ao pressionar Ctrl-C no teclado.
+trap '_exit SIGINT' SIGINT
+# SIGQUIT: Finalizar processo ao pressionar Ctrl-\ no teclado.
+trap '_exit SIGQUIT' SIGQUIT
+# SIGTERM: Finalizar processo através dos comandos "kill" ou "killall".
+trap '_exit SIGTERM' SIGTERM
+# SIGHUP: Desligar ou sair de um processo em execução em primeiro plano de um terminal
+trap '_exit SIGHUP' SIGHUP
+# EXIT: é um pseudo-sinal lançado pelo bash quando o script é finalizado com uma chamada direta a exit
+#       ou o fim do script é alcançado. Outra situação em que esse sinal é gerado, acontece quando um
+#       programa é executado incorretamente caso a opção errexit (set -e) esteja ativada.
+trap '_exit EXIT $?' EXIT
+
+# Iniciando sistema
+#startDaemon
+info "$(header)"
+installYq
+loadSettings
+validAndSetConfig
+#setLocalnets
+reorderWans
+info "$(showWans)"
+info "$(runtime)"
+info "$(footer)"
+mail "START"
+
+die 0
+
+# Loop de monitoramento dos links
+while true; do
+
+  now=$(date +%s)
+
+  # Testa links
+  testWans
+
+  last=$(date +%s)
+
+  # Verifique o tempo necessário de espera antes da próxima execução.
+  # Ex: Se a execução levar mais tempo do que o intervalo desejado (por exemplo, 1 minuto),
+  #     então a próxima execução deve iniciar imediatamente, sem aguardar.
+  if [[ ! $((now-last+DAEMON_RUN_INTERVAL+1)) -lt $((DAEMON_RUN_INTERVAL)) ]]; then
+    sleepTime=$((now-last+DAEMON_RUN_INTERVAL))
+  fi
+
+  # Aguarda o tempo necessário antes do próximo teste.
+  # O uso de um loop `for` para aguardar foi necessário para garantir que o comando `trap`,
+  # responsável por manipular sinais de interrupção do processo, funcione corretamente.
+  # Se apenas o `sleep` fosse utilizado, o processo só seria finalizado após a conclusão
+  # do tempo de espera, impedindo a interrupção imediata em caso de sinal de término.
+  for ((i=0;i<sleepTime;i++)); do
+    sleep 1
+  done
+
+done
