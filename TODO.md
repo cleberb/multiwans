@@ -12,6 +12,7 @@
   - [x] Mapear quais funções serão migradas para o multiwans
 - [ ] Validar a estrutura dos logs no console e no corpo do e-mail.
 - [ ] Comentar as funções
+  - [ ] Usar shdoc?
 - [x] Revisar a mensagem de invalidParam()
 - [ ] Validar que mark está sendo salvo em conntrack, para garantir o filtro de exclusão de registros.
   - [ ] Caso negativo, mudar o código para filtrar pelo ip da interface de rede ao invés de mark.
@@ -27,8 +28,11 @@
 - [ ] Criar arquivo config.example.yaml com valores genéricos
 - [x] getConfig() retornar lista separado por virgula? ou seria melhor valores por linha e evitar uso de IFS=, ?
 - [x] Configurações globais serem definidas em variáveis globais em checkConfig()?
-- [ ] Criar lógica de diretório de scripts UP() e DOWN()
+- [x] Criar lógica de diretório de scripts UP() e DOWN()
+  - [ ] Verificar se tem scripts sem permissão de execução?
 - [x] Verificar conflito de checkConfig e statusFile.
 - [x] Revisar config.yaml
-- [ ] Garantir rpfilter esteja desativado em todas as interfaces
-- [ ] Revisão do campo status em footer()
+- [x] Garantir rpfilter esteja desativado em todas as interfaces
+  - [x] Criar teste de testRpFilter
+- [x] Revisão do campo status em runtime()
+- [ ]

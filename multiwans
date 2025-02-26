@@ -23,15 +23,9 @@ shopt -s lastpipe
 # Variável responsável por listar diretórios de executáveis do sistema
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
 
-# Define linguagem padrão para utilização nos comandos utilizados pelo script
-# Se for Debian
-if [ -e /etc/debian_version ]; then
-  export LANG="C.UTF-8" 2> /dev/null
-  export LC_ALL="C.UTF-8" 2> /dev/null
-else
-  export LANG="en_US.UTF-8" 2> /dev/null
-  export LC_ALL="en_US.UTF-8" 2> /dev/null
-fi
+# Define idioma padrão
+export LANG="C.UTF-8"
+export LC_ALL="C.UTF-8"
 
 # Definir umask restritivo para o script
 # shellcheck disable=SC2034
@@ -44,6 +38,7 @@ SCRIPT_NAME="$(basename "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Caminho absoluto do script
+# shellcheck disable=SC2034
 SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_NAME"
 
 # Definir início de execução de script
@@ -214,6 +209,7 @@ function mail(){
                       2>&1
   )
 
+  # shellcheck disable=SC2181
   if [ "$?" == "0" ]; then
     _info "$result"
   else
@@ -276,8 +272,6 @@ function footer(){
 
 # Calcula e emite duração do processamento do script
 function runtime(){
-  local status=$STATUS
-
   local endTime=$(date +%s)
 
   local totalTime=$((endTime - START_TIME))
@@ -301,8 +295,6 @@ function runtime(){
   echo "$_TB_INNER"
 
   column -s'£' -t < <(
-    echo "$_TB_LINE Status:£${status}"
-    echo "$_TB_LINE"
     echo "$_TB_LINE Fim do processo:£$(date +%Y-%m-%d\ %H:%M:%S -d @${endTime})"
     echo "$_TB_LINE Duração do processo:£$duration"
   )
@@ -436,6 +428,12 @@ function setGlobalConfig(){
 
   # Criar/limpar arquivo de status de links WANS
   install -m 644 /dev/null $DAEMON_STATUS_FILE
+
+  # Identificar gateway padrão definido
+  DEFAULT_GATEWAY=""
+
+  # Definir mudança de status dos links
+  WANS_STATE_CHANGE=false
 }
 
 # Verificação e definição de valores padrões de configurações
@@ -882,8 +880,8 @@ function validAndSetConfig(){
 
     done
 
-    # Definir status do link
-    setStatusWan $wanId ON
+    # Definir status do link como "UNKNOW"
+    setConfig "WANS[$wanId].status" UNKNOW
 
   done
 
@@ -1025,6 +1023,30 @@ function createListIP(){
 function setLocalnets(){
   # Criar lista IPSET com redes locais
   createListIP localnets "$LOCALNETS"
+}
+
+function setRpFilter() {
+  local action=$1
+  local wanId=$2
+
+  local iface=$(getConfig "WANS[$wanId].iface")
+
+  [ "$action" == "on" ] && value=1 || value=0
+
+  echo "$value" > /proc/sys/net/ipv4/conf/$iface/rp_filter
+
+  _success "$([ "$action" == "on" ] && echo "Ativado" || echo "Desativado") RP Filter para interface \"$iface\"."
+}
+
+function testRpFilter() {
+  local wanId=$1
+
+  local iface=$(getConfig "WANS[$wanId].iface")
+
+  grep -q '0' /proc/sys/net/ipv4/conf/$iface/rp_filter && return 0
+
+  _error "RP Filter está ativo para interface \"$iface\"."
+  return 1
 }
 
 function setRouteTable(){
@@ -1805,7 +1827,7 @@ function setStatusWan(){
   local iface=$(getConfig "WANS[$wanId].iface")
 
   # Registra mudança de status em variável global
-  [ "$current_status" != "$status" ] && WANS_STATE_CHANGE=true
+  [ "$current_status" != "UNKNOW" ] && [ "$current_status" != "$status" ] && WANS_STATE_CHANGE=true
 
   setConfig "WANS[$wanId].status" "$status"
 
@@ -1815,6 +1837,20 @@ function setStatusWan(){
   else
     echo "${iface}:${status}" >> "$DAEMON_STATUS_FILE"
   fi
+}
+
+# Definir WAN com status "ON"
+function setOnWan(){
+  local wanId=$1
+  local description=$(getConfig "WANS[$wanId].description")
+  local orderFailover=$(getConfig "WANS[$wanId].orderFailover")
+  local message="${2:-O link \"$description\" está ONLINE, seu serviço foi reestabelecido com sucesso!}"
+
+  setStatusWan $wanId ON
+
+  _success "$message"
+
+  scriptHelper up
 }
 
 # Definir WAN com status "OFF"
@@ -1832,11 +1868,32 @@ function setOffWan(){
   fi
 
   _error "$message"
+
+  scriptHelper down
+}
+
+function scriptHelper(){
+  local action=$1
+  local wanId=$2
+
+  local iface=$(getConfig "WANS[$wanId].iface")
+
+  mapfile -t scripts < <(find "$SCRIPT_DIR/scripts/$iface/$action/" -maxdepth 1 -type f -executable | sort -V)
+
+  for script in "${scripts[@]}"; do
+    local result
+    if result=$(./$script 2>&1); then
+      _info "Script $(basename "$script") executado com sucesso.\n$result"
+    else
+      _error "Falha ao executar script $(basename "$script"):\n$result"
+    fi
+  done
+
 }
 
 function startDaemon(){
   if ! status_exec; then
-    echo -e "${ICON_ERROR} ERROR: O daemon ($$) já está em execução.\nO PID do processo em execução é ($(pidof -o $$ -o $PPID -o %PPID -x $SCRIPTNAME 2>&1))." >&2
+    echo -e "${ICON_ERROR} ERROR: O daemon ($$) já está em execução.\nO PID do processo em execução é ($(pidof -o $$ -o $PPID -o %PPID -x $SCRIPT_NAME 2>&1))." >&2
     exit 1
   fi
 
@@ -1865,9 +1922,6 @@ function startDaemon(){
     exit 1
   fi
 
-  # Definir ação do script para assunto do e-mail
-  ACTION_SUBJECT="START"
-
   # Apagar variável de registro de info para envio por e-mail
   unset LOG_MESSAGE
 
@@ -1882,9 +1936,6 @@ function startDaemon(){
   info "\n$_TB_TOP"
   info "$_TB_LINE Iniciando script MultiWans"
   info "$_TB_BOTTOM"
-
-  # Variável global responsável por identificar gateway padrão definido
-  DEFAULT_GATEWAY=""
 
   local wanId
   for wanId in $(getListIds WANS); do
@@ -1907,6 +1958,8 @@ function startDaemon(){
       testIfaceEnabled $wanId || restartIface $wanId || return 1
       testIfaceConnection $wanId || return 1
       testIfaceConfiguration $wanId || return 1
+
+      setRpFilter off $wanId
 
       if [ "$orderFailover" != "" ] && [ "$DEFAULT_GATEWAY" == "" ]; then
         if [ "$(getCurrentDefaultGateway)" == "$wanId" ]; then
@@ -1935,7 +1988,8 @@ function startDaemon(){
       return 0
     }
 
-    setConfigWan || setOffWan $wanId
+    # shellcheck disable=SC2015
+    setConfigWan && setOnWan $wanId || setOffWan $wanId
 
   done
 
@@ -1963,9 +2017,6 @@ function stopDaemon(){
 
   # Variável utilizada em mensagens para usuário
   local SHOW_TIME=$(date +%d/%m/%Y\ %H:%M:%S -d @$START_TIME)
-
-  # Definir ação do script para assunto do e-mail
-  ACTION_SUBJECT="STOP"
 
   # Apaga variável de registro de info para envio por e-mail
   unset LOG_MESSAGE
@@ -2021,6 +2072,8 @@ function stopDaemon(){
     testIfaceConnection $wanId || continue
     testIfaceConfiguration $wanId || continue
 
+    setRpFilter on $wanId
+
     setDefaultGateway $wanId
   done
 
@@ -2059,9 +2112,6 @@ function testWans(){
   # Apaga variável de registro de info para envio por e-mail
   unset LOG_MESSAGE
 
-  # Variável global que defini mudança de status dos links
-  WANS_STATE_CHANGE=false
-
   # Variável responsável por identificar se gateway padrão foi definido
   local isSetDefaultGateway=false
 
@@ -2085,17 +2135,19 @@ function testWans(){
 
     function testWan() {
       testIfaceAvailable $wanId || return 1
-      testIfaceEnabled $wanId || { setStatusLink $wanId OFF; restartIface $wanId; } || return 1
+      testIfaceEnabled $wanId || { setStatusWan $wanId OFF; restartIface $wanId; } || return 1
       testIfaceConnection $wanId || return 1
       testIfaceConfiguration $wanId || return 1
 
-      testRouteTable $wanId || { setStatusLink $wanId OFF; setRouteTable --add $wanId; } || return 1
+      testRpFilter $wanId || setRpFilter off $wanId
 
-      testRouteTableGateway $wanId || { setStatusLink $wanId OFF; setRouteTableGateway --add $wanId; } || return 1
+      testRouteTable $wanId || { setStatusWan $wanId OFF; setRouteTable --add $wanId; } || return 1
 
-      testRulesTableRoute $wanId || { setStatusLink $wanId OFF; setRulesTableRoute --add $wanId; } || return 1
+      testRouteTableGateway $wanId || { setStatusWan $wanId OFF; setRouteTableGateway --add $wanId; } || return 1
 
-      testInputIptablesFilters $wanId || { setStatusLink $wanId OFF; setInputIptablesFilters --add $wanId; } || return 1
+      testRulesTableRoute $wanId || { setStatusWan $wanId OFF; setRulesTableRoute --add $wanId; } || return 1
+
+      testInputIptablesFilters $wanId || { setStatusWan $wanId OFF; setInputIptablesFilters --add $wanId; } || return 1
 
       testPing $wanId || return 1
     }
@@ -2116,7 +2168,7 @@ function testWans(){
           continue
         else
           # A rota padrão atual está diferente da definição do sistema, portanto o link atualmente está OFFLINE
-          setStatusLink $wanId OFF
+          setStatusWan $wanId OFF
         fi
       fi
 
@@ -2126,7 +2178,7 @@ function testWans(){
         if [ "$orderFailover" != "1" ]; then
           # Remove regras de marcação de pacotes do iptables
           if ! setIptablesFilters --delete $wanId; then
-            # Não é necessário registrar o erro em setOffLink(), pois este erro não deixa o link OFFLINE,
+            # Não é necessário registrar o erro em setOffWan(), pois este erro não deixa o link OFFLINE,
             # pois o mesmo já foi definido como rota padrão.
             _error "Verifique os logs acima e contatar equipe de infraestrutura!"
           fi
@@ -2137,10 +2189,7 @@ function testWans(){
           # Limpa o cache das tabelas de roteamento
           ip route flush cache
 
-          # Definir status do link
-          setStatusWan $wanId ON
-
-          _success "O link \"$description\" está ONLINE, seu serviço foi reestabelecido com sucesso!"
+          setOnWan $wanId
         fi
 
         continue
@@ -2173,10 +2222,7 @@ function testWans(){
             # Limpa o cache das tabelas de roteamento
             ip route flush cache
 
-            # Definir status do link
-            setStatusWan $wanId ON
-
-            _error "O link \"$description\" está ONLINE, seu serviço foi reestabelecido com sucesso!"
+            setOnWan $wanId
           fi
         else
           setOffWan $wanId "O link \"$description\" está ONLINE mas não foi possível ativar o serviço.\nVerifique os logs acima e contatar equipe de infraestrutura!"
