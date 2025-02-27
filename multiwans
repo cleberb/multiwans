@@ -72,11 +72,11 @@ ICON_SUCCESS="\\U2705"
 ICON_WARNING="\\U26A0\\UFE0F"
 ICON_ERROR="\\U274C"
 
-# Bordas de tabela
-_TB_TOP="╭────────────────────────────────────────────────────────────────────────────────────"
-_TB_INNER="├────────────────────────────────────────────────────────────────────────────────────"
-_TB_BOTTOM="╰────────────────────────────────────────────────────────────────────────────────────"
-_TB_LINE="│"
+# Bordas de caixa box/tabela
+_BOX_TOP="╭────────────────────────────────────────────────────────────────────────────────────"
+_BOX_INNER="├────────────────────────────────────────────────────────────────────────────────────"
+_BOX_BOTTOM="╰────────────────────────────────────────────────────────────────────────────────────"
+_BOX_LINE="│"
 
 # Hostname
 HOSTNAME=$(hostname)
@@ -152,7 +152,6 @@ function info(){
 function error(){
   local message="$*\n"
   LOG_MESSAGE+="${message}"
-  STATUS="ERROR"
   echo -ne "$message" | tee >(sed '/^$/d' | logger --priority daemon.err --tag ${SCRIPT_NAME}[$$]) >&2
 }
 
@@ -160,28 +159,28 @@ function _info(){
   local message="$1"
 
   # shellcheck disable=SC2001
-  info "$(echo -e "$ICON_INFO INFO:$(sed 's/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
+  info "$(echo -e "$ICON_INFO  $(sed -e '1s/^/ /g' -e '1!s/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
 }
 
 function _success(){
   local message="$1"
 
   # shellcheck disable=SC2001
-  info "$(echo -e "$ICON_SUCCESS $(sed 's/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
+  info "$(echo -e "$ICON_SUCCESS $(sed -e '1s/^/ /g' -e '1!s/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
 }
 
 function _error(){
   local message="$1"
 
   # shellcheck disable=SC2001
-  error "$(echo -e "$ICON_ERROR ERROR:$(sed 's/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
+  error "$(echo -e "$ICON_ERROR  ERROR:$(sed 's/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
 }
 
 function _warning(){
   local message="$1"
 
   # shellcheck disable=SC2001
-  error "$(echo -e "$ICON_WARNING WARNING:$(sed 's/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
+  error "$(echo -e "$ICON_WARNING  WARNING:$(sed 's/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
 }
 
 function mail(){
@@ -235,36 +234,36 @@ function uptime(){
 
 # Cabeçalho informativo
 function header(){
-  echo -e "\n$_TB_TOP"
-  echo -e "$_TB_LINE $DESCRIPTION"
-  echo -e "$_TB_INNER"
+  echo -e "\n$_BOX_TOP"
+  echo -e "$_BOX_LINE $DESCRIPTION"
+  echo -e "$_BOX_INNER"
 
   # Endereços IP's
-  IP_LIST=$(ip -oneline -details link show | grep -Ev 'state DOWN|ifb[0-9]+|bridge|loopback|link/none|link/ipip' | awk '{print $2}' | sed 's/:\|\ //g' | xargs -n 1 ip -4 -br a s | awk '{print $1": "$3}' | sort | pr --across --omit-pagination --join-lines --columns=3)
+  IP_LIST=$(ip -oneline -details link show | grep -Ev 'state DOWN|ifb[0-9]+|bridge|loopback|link/none|link/ipip' | awk '{print $2}' | sed 's/:\|\ //g' | xargs -n 1 ip -4 -br a s | awk '{print $1": "$3}' | sort | pr --across --omit-pagination --join-lines --columns=2)
 
   column -s'£' -t < <(
-    echo -e "$_TB_LINE Hostname:£$HOSTNAME"
-    echo -e "$_TB_LINE Endereço(s) IP(s):£$(echo -e "$IP_LIST" | sed -e "1!s/^/$_TB_LINE £/g")"
-    echo -e "$_TB_LINE Uptime do sistema:£$(uptime)"
-    echo -e "$_TB_LINE Início do processo:£$SHOW_TIME"
+    echo -e "$_BOX_LINE Hostname:£$HOSTNAME"
+    echo -e "$_BOX_LINE Endereço(s) IP(s):£$(echo -e "$IP_LIST" | sed -e "1!s/^/$_BOX_LINE £/g")"
+    echo -e "$_BOX_LINE Uptime do sistema:£$(uptime)"
+    echo -e "$_BOX_LINE Início do processo:£$SHOW_TIME"
   )
 
-  echo -e "$_TB_BOTTOM"
+  echo -e "$_BOX_BOTTOM"
 }
 
 # Rodapé informativo
 function footer(){
-  echo -e "\n$_TB_TOP"
-  echo -e "$_TB_LINE INFORMAÇÕES DO SISTEMA"
-  echo "$_TB_INNER"
+  echo -e "\n$_BOX_TOP"
+  echo -e "$_BOX_LINE INFORMAÇÕES DO SISTEMA"
+  echo "$_BOX_INNER"
 
   column -s'£' -t < <(
-    echo "$_TB_LINE DESCRIÇÃO:£$DESCRIPTION"
-    echo "$_TB_LINE DESENVOLVEDOR:£$DEVELOPER"
-    echo "$_TB_LINE VERSÃO:£$VERSION"
+    echo "$_BOX_LINE DESCRIÇÃO:£$DESCRIPTION"
+    echo "$_BOX_LINE DESENVOLVEDOR:£$DEVELOPER"
+    echo "$_BOX_LINE VERSÃO:£$VERSION"
   )
 
-  echo "$_TB_BOTTOM"
+  echo "$_BOX_BOTTOM"
 
   echo -e "\n© $(tr '[:lower:]' '[:upper:]' <<< $COMPANY_NAME) - $COMPANY_DEPARTMENT - $(date +%Y)"
   echo -e "$COMPANY_SITE\n"
@@ -276,37 +275,38 @@ function runtime(){
 
   local totalTime=$((endTime - START_TIME))
 
+  local duration=""
   if [ "$totalTime" != "0" ]; then
     local d h m s parts=()
-    (( d = uptime / 60 / 60 / 24 )) && parts+=("$d dia(s)")
-    (( h = uptime / 60 / 60 % 24 )) && parts+=("$h hora(s)")
-    (( m = uptime / 60 % 60 )) && parts+=("$m min.")
-    (( s = uptime % 60 )) && parts+=("$s seg.")
+    (( d = totalTime / 60 / 60 / 24 )) && parts+=("$d dia(s)")
+    (( h = totalTime / 60 / 60 % 24 )) && parts+=("$h hora(s)")
+    (( m = totalTime / 60 % 60 )) && parts+=("$m min.")
+    (( s = totalTime % 60 )) && parts+=("$s seg.")
 
     # Junta os elementos com ", " e substitui a última vírgula por " e "
     # shellcheck disable=SC2001
-    local duration="$(IFS=', '; echo "${parts[*]}" | sed 's/, \(.*\)$/ e \1/')"
+    duration="$(IFS=', '; echo "${parts[*]}" | sed 's/, \(.*\)$/ e \1/')"
   else
-    local duration="0 seg."
+    duration="0 seg."
   fi
 
-  echo -e "\n$_TB_TOP"
-  echo "$_TB_LINE PROCESSAMENTO FINALIZADO"
-  echo "$_TB_INNER"
+  echo -e "\n$_BOX_TOP"
+  echo "$_BOX_LINE PROCESSAMENTO FINALIZADO"
+  echo "$_BOX_INNER"
 
   column -s'£' -t < <(
-    echo "$_TB_LINE Fim do processo:£$(date +%Y-%m-%d\ %H:%M:%S -d @${endTime})"
-    echo "$_TB_LINE Duração do processo:£$duration"
+    echo "$_BOX_LINE Fim do processo:£$(date +%Y-%m-%d\ %H:%M:%S -d @${endTime})"
+    echo "$_BOX_LINE Duração do processo:£$duration"
   )
 
-  echo "$_TB_BOTTOM"
+  echo "$_BOX_BOTTOM"
 }
 
 # Verificar se o daemon já está em execução
 function statusExec() {
 
   # Retorna positivo (0) se não estiver em execução
-  pidof -o $$ -o $PPID -o %PPID -x balance.sh > /dev/null 2>&1 && return 1 || return 0
+  pidof -o $$ -o $PPID -o %PPID -x $SCRIPT_NAME > /dev/null 2>&1 && return 1 || return 0
 
 }
 
@@ -894,8 +894,8 @@ function reorderWans(){
 # Dados dos links WANS
 function showWans(){
 
-  echo -e "\n$_TB_TOP"
-  echo -e "$_TB_LINE DADOS DOS LINKS"
+  echo -e "\n$_BOX_TOP"
+  echo -e "$_BOX_LINE DADOS DOS LINKS"
 
   local wanId
   for wanId in $(getListIds WANS); do
@@ -903,10 +903,10 @@ function showWans(){
     local description=$(getConfig "WANS[$wanId].description")
     local enabled=$(getConfig "WANS[$wanId].enabled")
 
-    echo -e "$_TB_INNER"
-    echo "$_TB_LINE"
-    echo "$_TB_LINE Descrição: $description"
-    echo "$_TB_LINE"
+    echo -e "$_BOX_INNER"
+    echo "$_BOX_LINE"
+    echo "$_BOX_LINE Descrição: $description"
+    echo "$_BOX_LINE"
 
     column -s'£' -t < <(
       if [ "$enabled" == "true" ]; then
@@ -921,15 +921,15 @@ function showWans(){
         local ping=$(getConfig "WANS[$wanId].ping | join(\",\")")
         local filters=$(getListIds "WANS[$wanId].filters")
 
-        [ "$note" ] && echo "$_TB_LINE Nota:£$note"
-        echo "$_TB_LINE Ordem de Failover:£$orderFailover$( [ "$orderFailover" == "1" ] && echo " [Link Principal]" )"
-        echo "$_TB_LINE Interface:£$iface"
-        echo "$_TB_LINE IP:£$ip"
-        echo "$_TB_LINE Mascara de Rede:£$mask"
-        echo "$_TB_LINE Gateway:£$gateway"
-        echo "$_TB_LINE DNS(s):£$dns"
-        echo "$_TB_LINE Destino(s) de ping:£$ping"
-        echo "$_TB_LINE Marcação de pacotes:£$mark"
+        [ "$note" ] && echo "$_BOX_LINE Nota:£$note"
+        echo "$_BOX_LINE Ordem de Failover:£$orderFailover$( [ "$orderFailover" == "1" ] && echo " [Link Principal]" )"
+        echo "$_BOX_LINE Interface:£$iface"
+        echo "$_BOX_LINE IP:£$ip"
+        echo "$_BOX_LINE Mascara de Rede:£$mask"
+        echo "$_BOX_LINE Gateway:£$gateway"
+        echo "$_BOX_LINE DNS(s):£$dns"
+        echo "$_BOX_LINE Destino(s) de ping:£$ping"
+        echo "$_BOX_LINE Marcação de pacotes:£$mark"
 
         if [ "$filters" != "" ]; then
 
@@ -937,11 +937,11 @@ function showWans(){
           if [ "$orderFailover" == "1" ]; then
 
             # Não imprimir os filtros do link principal, caso existam, pois não serão definidos
-            echo "$_TB_LINE Filtro(s):£Este link é a rota principal, os filtros definidos serão ignorados."
+            echo "$_BOX_LINE Filtro(s):£Este link é a rota principal, os filtros definidos serão ignorados."
 
           else
 
-            echo "$_TB_LINE Filtro(s):"
+            echo "$_BOX_LINE Filtro(s):"
 
             local filterId
             for filterId in $filters; do
@@ -949,7 +949,7 @@ function showWans(){
               local filter_enabled=$(getConfig "WANS[$wanId].filters[$filterId].enabled")
               local filter_description=$(getConfig "WANS[$wanId].filters[$filterId].description")
 
-              echo "$_TB_LINE   - Descrição:£$filter_description"
+              echo "$_BOX_LINE   - Descrição:£$filter_description"
               if [ "$filter_enabled" == "true" ]; then
                 local filter_note=$(getConfig "WANS[$wanId].filters[$filterId].note")
                 local chainMangle=$(getConfig "WANS[$wanId].filters[$filterId].chainMangle")
@@ -959,30 +959,30 @@ function showWans(){
                 local sports=$(getConfig "WANS[$wanId].filters[$filterId].sports // [] | join(\",\")")
                 local dports=$(getConfig "WANS[$wanId].filters[$filterId].dports // [] | join(\",\")")
 
-                [ "$filter_note" ] && echo "$_TB_LINE       Nota:£$filter_note"
-                echo "$_TB_LINE       Mangle Chain:£$chainMangle"
-                [ "$src" != "0.0.0.0/0" ] && echo "$_TB_LINE       IP(s) de origem:£$src"
-                [ "$dst" != "0.0.0.0/0" ] && echo "$_TB_LINE       IP(s) de destino:£$dst"
-                [ "$protocol" ] && echo "$_TB_LINE       Protocolo:£$protocol"
-                [ "$sports" ] && echo "$_TB_LINE       Porta(s) de origem:£$sports"
-                [ "$dports" ] && echo "$_TB_LINE       Porta(s) de destino:£$dports"
+                [ "$filter_note" ] && echo "$_BOX_LINE       Nota:£$filter_note"
+                echo "$_BOX_LINE       Mangle Chain:£$chainMangle"
+                [ "$src" != "0.0.0.0/0" ] && echo "$_BOX_LINE       IP(s) de origem:£$src"
+                [ "$dst" != "0.0.0.0/0" ] && echo "$_BOX_LINE       IP(s) de destino:£$dst"
+                [ "$protocol" ] && echo "$_BOX_LINE       Protocolo:£$protocol"
+                [ "$sports" ] && echo "$_BOX_LINE       Porta(s) de origem:£$sports"
+                [ "$dports" ] && echo "$_BOX_LINE       Porta(s) de destino:£$dports"
               else
-                echo "$_TB_LINE       Enabled:£false"
+                echo "$_BOX_LINE       Enabled:£false"
               fi
             done
 
           fi
 
         else
-          echo "$_TB_LINE Filtro(s):£-"
+          echo "$_BOX_LINE Filtro(s):£-"
         fi
       else
-        echo "$_TB_LINE Enabled:£false"
+        echo "$_BOX_LINE Enabled:£false"
       fi
     )
   done
 
-  echo -e "$_TB_BOTTOM"
+  echo -e "$_BOX_BOTTOM"
 
 }
 
@@ -994,9 +994,7 @@ function createListIP(){
   local result
 
   if $IPSET list -name $list > /dev/null 2>&1; then
-    if result=$($IPSET flush ${list} 2>&1 >/dev/null); then
-      _success "Limpado lista de IP's ${list}."
-    else
+    if ! result=$($IPSET flush ${list} 2>&1 >/dev/null); then
       # shellcheck disable=SC2001
       _error "Falha na limpeza da lista de IP's ${list}:\n$(sed -e 's/ipset v[0-9\.]\+: //g' <<< "$result")"
       die 1
@@ -1011,7 +1009,7 @@ function createListIP(){
 
   local ip=""
   for ip in $ips; do
-    if result=$($IPSET add -exist $list $ip 2>&1 >/dev/null); then
+    if ! result=$($IPSET add -exist $list $ip 2>&1 >/dev/null); then
       # shellcheck disable=SC2001
       _error "Não foi possível adicionar o endereço IP \"$ip\" na lista \"$list\":\n$(sed -e 's/ipset v[0-9\.]\+: //g' <<< "$result")"
       die 1
@@ -1491,7 +1489,7 @@ function setIptablesFilters(){
     if [ "$dst" == '!localnets' ]; then
       # Remove a string "!localnets" para processamento posterior por conntrackDelete()
       dst=""
-      _dst='-m set --match-set !localnets dst'
+      _dst='-m set ! --match-set localnets dst'
     else
       _dst="-s $dst"
     fi
@@ -1500,8 +1498,8 @@ function setIptablesFilters(){
 
     local _sports
     if [ "$sports" != "" ]; then
-      if grep -q '\,' <<< "$sports"; then
-        _sports="-m multiport --sport $sports"
+      if [ "$(wc -l <<< "$sports")" -gt 1 ]; then
+        _sports="-m multiport --sports $(paste -d, -s <<< "$sports")"
       else
         _sports="--sport $sports"
       fi
@@ -1509,10 +1507,10 @@ function setIptablesFilters(){
 
     local _dports
     if [ "$dports" != "" ]; then
-      if grep -q '\,' <<< "$dports"; then
-        _dports="-m multiport --dport $dports"
+      if [ "$(wc -l <<< "$dports")" -gt 1 ]; then
+        _dports="-m multiport --dports $(paste -d, -s <<< "$dports")"
       else
-        _dports="--dport $dports"
+        _dports="--sport $dports"
       fi
     fi
 
@@ -1618,8 +1616,8 @@ function testIptablesFilters(){
 
     local _sports
     if [ "$sports" != "" ]; then
-      if grep -q '\,' <<< "$sports"; then
-        _sports="-m multiport --sport $sports"
+      if [ "$(wc -l <<< "$sports")" -gt 1 ]; then
+        _sports="-m multiport --sports $(paste -d, -s <<< "$sports")"
       else
         _sports="--sport $sports"
       fi
@@ -1627,10 +1625,10 @@ function testIptablesFilters(){
 
     local _dports
     if [ "$dports" != "" ]; then
-      if grep -q '\,' <<< "$dports"; then
-        _dports="-m multiport --dport $dports"
+      if [ "$(wc -l <<< "$dports")" -gt 1 ]; then
+        _dports="-m multiport --dports $(paste -d, -s <<< "$dports")"
       else
-        _dports="--dport $dports"
+        _dports="--sport $dports"
       fi
     fi
 
@@ -1844,11 +1842,12 @@ function setOnWan(){
   local wanId=$1
   local description=$(getConfig "WANS[$wanId].description")
   local orderFailover=$(getConfig "WANS[$wanId].orderFailover")
+  local status=$(getConfig "WANS[$wanId].status")
   local message="${2:-O link \"$description\" está ONLINE, seu serviço foi reestabelecido com sucesso!}"
 
   setStatusWan $wanId ON
 
-  _success "$message"
+  [ "$status" == "UNKNOW" ] || _success "$message"
 
   scriptHelper up
 }
@@ -1878,7 +1877,7 @@ function scriptHelper(){
 
   local iface=$(getConfig "WANS[$wanId].iface")
 
-  mapfile -t scripts < <(find "$SCRIPT_DIR/scripts/$iface/$action/" -maxdepth 1 -type f -executable | sort -V)
+  mapfile -t scripts < <(find "$SCRIPT_DIR/scripts/$iface/$action/" -maxdepth 1 -type f -executable 2> /dev/null | sort -V)
 
   for script in "${scripts[@]}"; do
     local result
@@ -1892,50 +1891,56 @@ function scriptHelper(){
 }
 
 function startDaemon(){
-  if ! status_exec; then
+  if ! statusExec; then
     echo -e "${ICON_ERROR} ERROR: O daemon ($$) já está em execução.\nO PID do processo em execução é ($(pidof -o $$ -o $PPID -o %PPID -x $SCRIPT_NAME 2>&1))." >&2
-    exit 1
+    die 1
   fi
 
   if ! [ "$CONNTRACK" ]; then
     echo -e "${ICON_ERROR} ERROR: A ferramenta auxiliar \"conntrack\" não está instalada." >&2
-    exit 1
+    die 1
   fi
 
   if ! [ "$IPSET" ]; then
     echo -e "${ICON_ERROR} ERROR: A ferramenta auxiliar \"ipset\" não está instalada." >&2
-    exit 1
+    die 1
   fi
 
   if ! [ "$CURL" ]; then
     echo -e "${ICON_ERROR} ERROR: A ferramenta auxiliar \"curl\" não está instalada." >&2
-    exit 1
+    die 1
   fi
 
   if ! [ "$RGXG" ]; then
     echo -e "${ICON_ERROR} ERROR: A ferramenta auxiliar \"rgxg\" não está instalada." >&2
-    exit 1
+    die 1
   fi
 
   if ! [ "$SENDEMAIL" ]; then
     echo -e "${ICON_ERROR} ERROR: A ferramenta auxiliar \"sendEmail\" não está instalada." >&2
-    exit 1
+    die 1
+  fi
+
+  installYq
+  if ! [ "$YQ" ]; then
+    echo -e "${ICON_ERROR} ERROR: A ferramenta auxiliar \"$YQ\" não está instalada." >&2
+    die 1
   fi
 
   # Apagar variável de registro de info para envio por e-mail
   unset LOG_MESSAGE
 
-  installYq
   loadSettings
   validAndSetConfig
-  setLocalnets
   reorderWans
 
   info "$(header)"
 
-  info "\n$_TB_TOP"
-  info "$_TB_LINE Iniciando script MultiWans"
-  info "$_TB_BOTTOM"
+  info "\n$_BOX_TOP"
+  info "$_BOX_LINE INICIANDO MULTIWANS"
+  info "$_BOX_BOTTOM"
+
+  setLocalnets
 
   local wanId
   for wanId in $(getListIds WANS); do
@@ -1944,9 +1949,9 @@ function startDaemon(){
     local description=$(getConfig "WANS[$wanId].description")
     local orderFailover=$(getConfig "WANS[$wanId].orderFailover")
 
-    info "\n$_TB_TOP"
-    info "$_TB_LINE Configurando link $description"
-    info "$_TB_BOTTOM"
+    info "\n$_BOX_TOP"
+    info "$_BOX_LINE CONFIGURANDO LINK $description"
+    info "$_BOX_BOTTOM"
 
     function setConfigWan() {
       if [ "$enabled" == "false" ]; then
@@ -1970,18 +1975,29 @@ function startDaemon(){
         fi
       fi
 
-      ! setRouteTable --add $wanId && [ "$DEFAULT_GATEWAY" != "$wanId" ] && return 1 || return 0
+      if ! setRouteTable --add $wanId; then
+        [ "$DEFAULT_GATEWAY" == "$wanId" ] && return 0 || return 1
+      fi
 
-      ! setRouteTableGateway --add $wanId && [ "$DEFAULT_GATEWAY" != "$wanId" ] && return 1 || return 0
+      if ! setRouteTableGateway --add $wanId; then
+        [ "$DEFAULT_GATEWAY" == "$wanId" ] && return 0 || return 1
+      fi
 
-      ! setFromLocalRuleTableRoute --add $wanId && [ "$DEFAULT_GATEWAY" != "$wanId" ] && return 1 || return 0
+      if ! setRulesTableRoute --add $wanId; then
+        [ "$DEFAULT_GATEWAY" == "$wanId" ] && return 0 || return 1
+      fi
 
-      ! setRulesTableRoute --add $wanId && [ "$DEFAULT_GATEWAY" != "$wanId" ] && return 1 || return 0
+      if ! setBasicFilters --add $wanId; then
+        [ "$DEFAULT_GATEWAY" == "$wanId" ] && return 0 || return 1
+      fi
 
-      setInputIptablesFilters --add $wanId
+      if ! setInputIptablesFilters --add $wanId; then
+        [ "$DEFAULT_GATEWAY" == "$wanId" ] && return 0 || return 1
+      fi
 
       # Link principal(orderFailover=1) ou link de rota padrão não possuem filtros de marcação de pacotes iptables
-      [ "$orderFailover" == "1" ] || [ "$DEFAULT_GATEWAY" == "$wanId" ] && return 0
+      [ "$orderFailover" == "1" ] && return 0
+      [ "$DEFAULT_GATEWAY" == "$wanId" ] && return 0
 
       setIptablesFilters --add $wanId || return 1
 
@@ -2023,9 +2039,9 @@ function stopDaemon(){
 
   info "$(header)"
 
-  info "\n$_TB_TOP"
-  info "$_TB_LINE Parando script MultiWans"
-  info "$_TB_BOTTOM"
+  info "\n$_BOX_TOP"
+  info "$_BOX_LINE Parando script MultiWans"
+  info "$_BOX_BOTTOM"
 
   local messageDefaultGateway
 
@@ -2040,10 +2056,11 @@ function stopDaemon(){
     local description=$(getConfig "WANS[$wanId].description")
     local orderFailover=$(getConfig "WANS[$wanId].orderFailover")
     local status=$(getConfig "WANS[$wanId].status")
+    local gateway=$(getConfig "WANS[$wanId].gateway")
 
-    info "\n$_TB_TOP"
-    info "$_TB_LINE Removendo configuração do link $description"
-    info "$_TB_BOTTOM"
+    info "\n$_BOX_TOP"
+    info "$_BOX_LINE Removendo configuração do link $description"
+    info "$_BOX_BOTTOM"
 
     # Link principal(orderFailover=1) e link de rota padrão não possuem filtros de marcação de pacotes iptables
     if [ "$orderFailover" != "1" ] || [ "$DEFAULT_GATEWAY" != "$wanId" ]; then
@@ -2051,6 +2068,8 @@ function stopDaemon(){
     fi
 
     setInputIptablesFilters --delete $wanId
+
+    setBasicFilters --delete $wanId
 
     setRulesTableRoute --delete $wanId
 
@@ -2129,9 +2148,9 @@ function testWans(){
     local orderFailover=$(getConfig "WANS[$wanId].orderFailover")
     local startingStatus=$(getConfig "WANS[$wanId].orderFailover")
 
-    info "\n$_TB_TOP"
-    info "$_TB_LINE Monitorando link $description"
-    info "$_TB_BOTTOM"
+    info "\n$_BOX_TOP"
+    info "$_BOX_LINE Monitorando link $description"
+    info "$_BOX_BOTTOM"
 
     function testWan() {
       testIfaceAvailable $wanId || return 1
@@ -2146,6 +2165,8 @@ function testWans(){
       testRouteTableGateway $wanId || { setStatusWan $wanId OFF; setRouteTableGateway --add $wanId; } || return 1
 
       testRulesTableRoute $wanId || { setStatusWan $wanId OFF; setRulesTableRoute --add $wanId; } || return 1
+
+      testBasicFilters $wanId || { setStatusWan $wanId OFF; setBasicFilters --add $wanId; } || return 1
 
       testInputIptablesFilters $wanId || { setStatusWan $wanId OFF; setInputIptablesFilters --add $wanId; } || return 1
 
@@ -2292,19 +2313,10 @@ trap '_exit SIGHUP' SIGHUP
 trap '_exit EXIT $?' EXIT
 
 # Iniciando sistema
-#startDaemon
-info "$(header)"
-installYq
-loadSettings
-validAndSetConfig
-#setLocalnets
-reorderWans
-info "$(showWans)"
-info "$(runtime)"
-info "$(footer)"
-mail "START"
+startDaemon
 
-die 0
+echo -e '\n\n#####################################---------------------------#####################################\n\n'
+read
 
 # Loop de monitoramento dos links
 while true; do

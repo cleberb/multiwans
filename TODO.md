@@ -34,5 +34,7 @@
 - [x] Revisar config.yaml
 - [x] Garantir rpfilter esteja desativado em todas as interfaces
   - [x] Criar teste de testRpFilter
-- [x] Revisão do campo status em runtime()
-- [ ]
+- [x] Revisão do campo status e duração em runtime()
+- [ ] Revisar testRouteTable()
+- [ ] Revisar mensagem de link online no start
+- [ ] Trocar icones info e warning sem caracteres especiais, ou tratar o que é armazenado em LOG_MESSAGE
