@@ -14,8 +14,7 @@
 - [ ] Comentar as funções
   - [ ] Usar shdoc?
 - [x] Revisar a mensagem de invalidParam()
-- [ ] Validar que mark está sendo salvo em conntrack, para garantir o filtro de exclusão de registros.
-  - [ ] Caso negativo, mudar o código para filtrar pelo ip da interface de rede ao invés de mark.
+- [x] Validar que mark está sendo salvo em conntrack, para garantir o filtro de exclusão de registros.
 - [ ] Editar README.md
   - [ ] Falar de STATUS_FILE, e como monitorar ele.
 - [x] STATUS_FILE ser um parâmetro de config.yaml?
@@ -35,6 +34,22 @@
 - [x] Garantir rpfilter esteja desativado em todas as interfaces
   - [x] Criar teste de testRpFilter
 - [x] Revisão do campo status e duração em runtime()
-- [ ] Revisar testRouteTable()
-- [ ] Revisar mensagem de link online no start
-- [ ] Trocar icones info e warning sem caracteres especiais, ou tratar o que é armazenado em LOG_MESSAGE
+- [x] Revisar testRouteTable()
+- [x] Revisar mensagem de link online no start
+- [x] Tratar caracteres invisíveis em ícones
+- [x] Revisar uptime(), uso de virgula
+- [x] corrigir indentação de _info() quando possui logs
+- [ ] Revisar monitoramento
+  - [x] Revisar runInterval
+  - [x] Não mostrou mensagem que o link foi reestabelecido
+  - [x] mensagens de conntrackDelete()?
+  - [x] Alterado ícone warning.
+  - [x] Avaliar o uso de startingStatus, chamar setOnWan ou apenas setStatusWAN id ON?
+  - [x] Revisar scriptHelper com um teste de exemplo
+- [x] Remover declaração de configurações globais do objeto YAML, após setado variáveis globais, reduzindo objeto
+- [x] Variáveis globais para e-mail
+- [ ] Trocar count_errors por intervalo de envio de alerta, seria mais assertivo
+- [x] Teste de resolução de DNS em pings
+- [x] Em caso de falha de ping, gerar warning, não error
+- [x] Gerar warning em caso de erro de DNS
+- [x] Unificar as chamadas de footer + runTime + INFO_WANS
