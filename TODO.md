@@ -10,7 +10,7 @@
 - [x] Melhorar lógica de sleepTest em decorrência do tempo de execução do último teste de link.
 - [x] Não usar módulo/lib externo para garantir um repositório único do projeto.
   - [x] Mapear quais funções serão migradas para o multiwans
-- [ ] Validar a estrutura dos logs no console e no corpo do e-mail.
+- [x] Validar a estrutura dos logs no console e no corpo do e-mail.
 - [ ] Comentar as funções
   - [ ] Usar shdoc?
 - [x] Revisar a mensagem de invalidParam()
@@ -24,7 +24,8 @@
 - [x] Melhorado estrutura de tabelas
 - [x] ícones em formato unicode
 - [x] Mudar estrutura yaml de ping, dns e alert para igual a config de e-mail
-- [ ] Criar arquivo config.example.yaml com valores genéricos
+- [x] Criar arquivo config.example.yaml com valores genéricos
+  - [ ] Criar valores de WANS, com todas as possibilidades de campos, pode deixar comentado no arquivo.
 - [x] getConfig() retornar lista separado por virgula? ou seria melhor valores por linha e evitar uso de IFS=, ?
 - [x] Configurações globais serem definidas em variáveis globais em checkConfig()?
 - [x] Criar lógica de diretório de scripts UP() e DOWN()
@@ -39,7 +40,7 @@
 - [x] Tratar caracteres invisíveis em ícones
 - [x] Revisar uptime(), uso de virgula
 - [x] corrigir indentação de _info() quando possui logs
-- [ ] Revisar monitoramento
+- [x] Revisar monitoramento
   - [x] Revisar runInterval
   - [x] Não mostrou mensagem que o link foi reestabelecido
   - [x] mensagens de conntrackDelete()?
@@ -48,8 +49,15 @@
   - [x] Revisar scriptHelper com um teste de exemplo
 - [x] Remover declaração de configurações globais do objeto YAML, após setado variáveis globais, reduzindo objeto
 - [x] Variáveis globais para e-mail
-- [ ] Trocar count_errors por intervalo de envio de alerta, seria mais assertivo
+- [x] Definir intervalo de envio de alertas
 - [x] Teste de resolução de DNS em pings
 - [x] Em caso de falha de ping, gerar warning, não error
 - [x] Gerar warning em caso de erro de DNS
 - [x] Unificar as chamadas de footer + runTime + INFO_WANS
+- [ ] Existe mudança de estado sem ter ocorrido um erro?
+- [x] Testar lista de IP's localnets.
+  - [ ] Após redefinir a lista em caso de falha, é necessário executar um conntrack delete?
+- [ ] Se o link padrão for um com mark=2, como o conntrackDelete() irá se comportar? visto que ele remove apenas mark=0.
+      Talvez seja necessário excluir tudo que não for marcação do link atual.
+- [x] trocar o nome da lista ipset de localnets para multiwans-localnets, para não ter conflito de nome com outras listas.
+- [ ] Validar fluxo de dados via FORWARD e OUTPUT e regras iptables

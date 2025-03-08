@@ -92,13 +92,14 @@ SETTINGS_FILE="${SCRIPT_DIR}/config.yaml"
 # Funções de controle
 ###############################################################################################################
 
+# Responsável por interromper o script
 function _exit(){
 
   # Sinal utilizado para sair do script
   local signal=$1
 
   # Status do último comando executado
-  local status=$2
+  local status=${2:-0}
 
   case $signal in
     SIGINT)
@@ -126,19 +127,18 @@ function _exit(){
   trap - EXIT
 
   # Sair do script
-  [ "$status" != "" ] && exit $status || exit 0
+  exit $status
 
 }
 
-# Função responsável por sair do script sem chamar tratamentos especiais
+# Sair do script imediatamente
 function die(){
 
   # Define ação padrão para o sinal EXIT. Caso contrário repetirá as ações do TRAP ao
   # executar o comando exit abaixo.
   trap - EXIT
 
-  exit $1
-
+  exit ${1:-1}
 }
 
 # Registrar mensagens informativas
@@ -157,6 +157,7 @@ function error(){
   echo -ne "$message" | tee >(sed '/^$/d' | logger --priority daemon.err --tag ${SCRIPT_NAME}[$$]) >&2
 }
 
+# Registrar mensagens de alerta com ícone
 function _info(){
   local message="$1"
 
@@ -165,6 +166,7 @@ function _info(){
   info "$(echo -e "$ICON_INFO $(sed 's/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
 }
 
+# Registrar mensagens de sucesso com ícone
 function _success(){
   local message="$1"
 
@@ -172,6 +174,7 @@ function _success(){
   info "$(echo -e "$ICON_SUCCESS$(sed 's/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
 }
 
+# Registrar mensagens de alerta com ícone
 function _error(){
   local message="$1"
 
@@ -179,6 +182,7 @@ function _error(){
   error "$(echo -e "$ICON_ERROR  ERROR:$(sed 's/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
 }
 
+# Registrar mensagens de alerta com ícone
 function _warning(){
   local message="$1"
 
@@ -186,6 +190,7 @@ function _warning(){
   error "$(echo -e "$ICON_WARNING  WARNING:$(sed 's/^/£/g' <<< "$(echo -e "$message")")" | column -s'£' -t)"
 }
 
+# Enviar email de alerta
 function mail(){
   local status=$1
 
@@ -211,7 +216,7 @@ function mail(){
   fi
 }
 
-# Uptime system
+# Obter uptime do sistema
 function uptime(){
   local uptime=$(cut -d. -f1 /proc/uptime)
 
@@ -266,7 +271,7 @@ function footer(){
   echo -e "$COMPANY_SITE\n"
 }
 
-# Calcula e emite duração do processamento do script
+# Emite duração do processamento do script
 function runtime(){
   local endTime=$(date +%s)
 
@@ -298,15 +303,13 @@ function runtime(){
 }
 
 # Verificar se o daemon já está em execução
+# Retorna positivo (0) se não estiver em execução
 function statusExec() {
-
-  # Retorna positivo (0) se não estiver em execução
-  pidof -o $$ -o $PPID -o %PPID -x $SCRIPT_NAME > /dev/null 2>&1 && return 1 || return 0
-
+  pidof -o $$ -o $PPID -o %PPID -x $SCRIPT_NAME &>/dev/null && return 1 || return 0
 }
 
+# Instala ou atualiza a ferramenta yq
 function installYq(){
-
   # Verificar a última versão do `yq`
   local latest_version
   if ! latest_version=$($CURL -s https://api.github.com/repos/mikefarah/yq/releases/latest 2>&1 | grep '"tag_name":' | cut -d '"' -f 4) || [ "$latest_version" == "" ]; then
@@ -336,20 +339,54 @@ function installYq(){
     return 1
   fi
 
-  mv /tmp/yq_linux_amd64 $YQ
-  chmod 755 $YQ
-  rm -f $log_curl_err $log_tar_err
+  install -m 755 /tmp/yq_linux_amd64 $YQ
+  rm -f /tmp/yq_linux_amd64* $log_curl_err $log_tar_err
 
-  _success "\"yq\" instalado/atualizado para versão ${latest_version}."
+  _success "\"yq\" instalado/atualizado com versão ${latest_version}."
+}
 
+# Verifica se as ferramentas utilizadas pelo script estão disponíveis no sistema
+function checkTools() {
+    if ! statusExec; then
+    _error "O daemon ($$) já está em execução.\nO PID do processo em execução é ($(pidof -o $$ -o $PPID -o %PPID -x $SCRIPT_NAME 2>&1))."
+    die 1
+  fi
+
+  if ! [ "$CONNTRACK" ]; then
+    _error "A ferramenta auxiliar \"conntrack\" não está instalada."
+    die 1
+  fi
+
+  if ! [ "$IPSET" ]; then
+    _error "A ferramenta auxiliar \"ipset\" não está instalada."
+    die 1
+  fi
+
+  if ! [ "$CURL" ]; then
+    _error "A ferramenta auxiliar \"curl\" não está instalada."
+    die 1
+  fi
+
+  if ! [ "$RGXG" ]; then
+    _error "A ferramenta auxiliar \"rgxg\" não está instalada."
+    die 1
+  fi
+
+  if ! [ "$SENDEMAIL" ]; then
+    _error "A ferramenta auxiliar \"sendEmail\" não está instalada."
+    die 1
+  fi
+
+  installYq
+  if ! [ "$YQ" ]; then
+    _error "A ferramenta auxiliar \"$YQ\" não está instalada."
+    die 1
+  fi
 }
 
 # Carregar arquivo de configurações
 function loadSettings(){
-
-  # Arquivo de configuração
   if [ -r "$SETTINGS_FILE" ]; then
-
     # Verificar o carregamento sem erros do arquivo de configurações
     if ! SETTINGS_YAML=$($YQ -e '... comments = ""' $SETTINGS_FILE 2>&1); then
       _error "O arquivo de configurações \"$SETTINGS_FILE\" contem algum erro:\n$SETTINGS_YAML"
@@ -360,13 +397,12 @@ function loadSettings(){
     _error "O arquivo de configurações \"$SETTINGS_FILE\" não pode ser lido ou não existe!"
     die 1
   fi
-
 }
 
 # Obter o valor de uma chave do YAML
 function getConfig() {
   local key="$1"
-  local value=$(yq ".$key | to_string | select(. != \"null\") // \"\" | trim" <<< "$SETTINGS_YAML")
+  local value=$($YQ ".$key | to_string | select(. != \"null\") // \"\" | trim" <<< "$SETTINGS_YAML")
 
   if $YQ -e 'select(type == "!!seq")' &> /dev/null <<< "$value"; then
     if ! $YQ -e '. | .[] | select(type == "!!seq" or type == "!!map")' &> /dev/null <<< "$value"; then
@@ -377,7 +413,7 @@ function getConfig() {
   echo "$value"
 }
 
-# Definir o valor de uma chave no YAML
+# Definir ou remover o valor de uma chave no YAML
 function setConfig() {
   local action
   if [[ "$1" =~ --addToList|--remove|--removeFromList ]]; then
@@ -390,16 +426,16 @@ function setConfig() {
 
   case "$action" in
     "--addToList")
-      SETTINGS_YAML="$(yq ".${key} += [\"$value\"]" <<< "$SETTINGS_YAML")"
+      SETTINGS_YAML="$($YQ ".${key} += [\"$value\"]" <<< "$SETTINGS_YAML")"
     ;;
     "--remove")
-      SETTINGS_YAML="$(yq "del(.${key})" <<< "$SETTINGS_YAML")"
+      SETTINGS_YAML="$($YQ "del(.${key})" <<< "$SETTINGS_YAML")"
     ;;
     "--removeFromList")
-      SETTINGS_YAML="$(yq ".${key} |= map(select(. != \"$value\"))" <<< "$SETTINGS_YAML")"
+      SETTINGS_YAML="$($YQ ".${key} |= map(select(. != \"$value\"))" <<< "$SETTINGS_YAML")"
     ;;
     *)
-      SETTINGS_YAML="$(yq ".$key = \"$value\"" <<< "$SETTINGS_YAML")"
+      SETTINGS_YAML="$($YQ ".$key = \"$value\"" <<< "$SETTINGS_YAML")"
     ;;
   esac
 }
@@ -407,9 +443,10 @@ function setConfig() {
 # Listar IDs de qualquer lista no YAML
 function getListIds() {
   local key="$1"
-  yq ".$key // {} | keys | join(\"\n\")" <<< "$SETTINGS_YAML"
+  $YQ ".$key // {} | keys | join(\"\n\")" <<< "$SETTINGS_YAML"
 }
 
+# Definir configurações globais
 function setGlobalConfig(){
   COMPANY_NAME=$(getConfig company.name)
   COMPANY_DEPARTMENT=$(getConfig company.department)
@@ -421,7 +458,7 @@ function setGlobalConfig(){
   setConfig --remove daemon
 
   ALERTS_MAX=$(getConfig alerts.max)
-  ALERTS_RESEND=$(getConfig alerts.resend)
+  ALERTS_INTERVAL=$(getConfig alerts.interval)
   setConfig --remove alerts
 
   PING_COUNT=$(getConfig ping.count)
@@ -453,11 +490,16 @@ function setGlobalConfig(){
   WANS_STATE_CHANGE=()
 
   INFO_WANS="$(showWans)"
+
+  # Registra número de alertas enviados
+  ALERT_COUNT=0
+
+  # Registra o timestamp do último alerta enviado
+  LAST_ALERT_TIME=0
 }
 
 # Verificação e definição de valores padrões de configurações
 function validAndSetConfig(){
-
   # Regex especiais
   local email_regex='^([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})$|^([a-zA-Z0-9_]+)$'
   local iface_regex='^((eth|vlan)[0-9]+|en(o|s)[a-f0-9]{1,2}|enp[a-f0-9]{1,2}s[a-f0-9]{1,2}(f[a-f0-9]{1,2})?|enx[a-f0-9]+)([\:\.][0-9]+)?$'
@@ -519,17 +561,17 @@ function validAndSetConfig(){
   # alerts.max
   local alertsMax=$(getConfig alerts.max)
   if [ "$alertsMax" == "" ]; then
-    setConfig alerts.max 3
+    setConfig alerts.max 2
   elif ! [[ "$alertsMax" =~ $integer_regex ]] || [ "$alertsMax" -lt 2 ] || [ "$alertsMax" -gt 10 ]; then
     invalidParam --global alerts.max "$alertsMax" "O valor deve ser um número inteiro de 2 a 10."
   fi
 
-  # alerts.resend
-  local alertsResend=$(getConfig alerts.resend)
-  if [ "$alertsResend" == "" ]; then
-    setConfig alerts.resend 30
-  elif ! [[ "$alertsResend" =~ $integer_regex ]] || [ "$alertsResend" -lt 20 ] || [ "$alertsResend" -gt 250 ]; then
-    invalidParam --global alerts.resend "$alertsResend" "O valor deve ser um número inteiro de 20 a 250."
+  # alerts.interval
+  local alertsInterval=$(getConfig alerts.interval)
+  if [ "$alertsInterval" == "" ]; then
+    setConfig alerts.interval 30
+  elif ! [[ "$alertsInterval" =~ $integer_regex ]] || [ "$alertsInterval" -lt 5 ] || [ "$alertsInterval" -gt 720 ]; then
+    invalidParam --global alerts.interval "$alertsInterval" "O valor deve ser um número inteiro de 5 a 720."
   fi
 
   # ping.count
@@ -819,9 +861,11 @@ function validAndSetConfig(){
 
       # dst
       if [ "$dst" == "" ]; then
-        dst='!localnets'
+        dst='!multiwans-localnets'
         # Definir endereço
         setConfig --addToList "WANS[$wanId].filters[$filterId].dst" "$dst"
+        # Definir flag de uso de lista ipset multiwans-localnets
+        setConfig --addToList "WANS[$wanId].useListLocalnets" "true"
       else
         local _ip
         for _ip in ${dst}; do
@@ -900,11 +944,12 @@ function validAndSetConfig(){
 
 }
 
+# Ordena os links WANS por ordem de Failover e marcação de pacotes(caso ordem de Failover esteja 'disabled')
 function reorderWans(){
   SETTINGS_YAML=$($YQ e '(.WANS |= sort_by(.orderFailover,.mark))' <<< "$SETTINGS_YAML")
 }
 
-# Dados dos links WANS
+# Exibe detalhes dos links WANS
 function showWans(){
 
   echo -e "\n$_BOX_TOP"
@@ -999,24 +1044,24 @@ function showWans(){
 
 }
 
-# Criar lista IPset de IP's
-function createListIP(){
+# Cria lista IPset de IP's
+function setListIP(){
   local list=$1
   local ips=$2
 
   local result
 
-  if $IPSET list -name $list > /dev/null 2>&1; then
+  if $IPSET list -name $list &>/dev/null; then
     if ! result=$($IPSET flush ${list} 2>&1 >/dev/null); then
       # shellcheck disable=SC2001
-      _error "Falha na limpeza da lista de IP's ${list}:\n$(sed -e 's/ipset v[0-9\.]\+: //g' <<< "$result")"
+      _error "Falha na limpeza da lista de IP's \"${list}\":\n$(sed -e 's/ipset v[0-9\.]\+: //g' <<< "$result")"
       die 1
     fi
   elif result=$($IPSET create $list -exist hash:net family inet maxelem 1024 2>&1 >/dev/null); then
     _success "Criado lista de IP's $list."
   else
     # shellcheck disable=SC2001
-    _error "Falha ao criar lista de IP's $list:\n$(sed -e 's/ipset v[0-9\.]\+: //g' <<< "$result")"
+    _error "Falha ao criar lista de IP's \"$list\":\n$(sed -e 's/ipset v[0-9\.]\+: //g' <<< "$result")"
     die 1
   fi
 
@@ -1028,14 +1073,28 @@ function createListIP(){
       die 1
     fi
   done
-
 }
 
-function setLocalnets(){
-  # Criar lista IPSET com redes locais
-  createListIP localnets "$LOCALNETS"
+# Testa lista IPset de IP's
+function testListIP(){
+  local list=$1
+  local ips=$2
+
+  if ! $IPSET list -name $list &>/dev/null; then
+    _error "Não existe lista de IP's \"$list\"."
+    return 1
+  fi
+
+  local ip=""
+  for ip in $ips; do
+    if ! $IPSET test -name $list $ip &>/dev/null; then
+      _error "O IP \"$ip\" não está declarado na lista de IP's \"$list\"."
+      return 1
+    fi
+  done
 }
 
+# Ativa/Desativa RP Filter
 function setRpFilter() {
   local action=$1
   local wanId=$2
@@ -1049,6 +1108,7 @@ function setRpFilter() {
   _success "$([ "$action" == "on" ] && echo "Ativado" || echo "Desativado") RP Filter para interface \"$iface\"."
 }
 
+# Testa se o RP Filter está desativado
 function testRpFilter() {
   local wanId=$1
 
@@ -1060,6 +1120,7 @@ function testRpFilter() {
   return 1
 }
 
+# Cria/Remove tabela de roteamento dos links WAN
 function setRouteTable(){
   local opt=$1
   local wanId=$2
@@ -1097,6 +1158,7 @@ function setRouteTable(){
   fi
 }
 
+# Testa se a tabela de roteamento dos links WAN está definida
 function testRouteTable(){
   local wanId=$1
   local mark=$(getConfig "WANS[$wanId].mark")
@@ -1116,6 +1178,7 @@ function testRouteTable(){
   fi
 }
 
+# Define/Remove gateway da tabela de roteamento dos links WAN
 function setRouteTableGateway(){
   local opt=$1
   local wanId=$2
@@ -1144,6 +1207,7 @@ function setRouteTableGateway(){
   fi
 }
 
+# Testa se o gateway da tabela de roteamento dos links WAN está definido
 function testRouteTableGateway(){
   local wanId=$1
   local mark=$(getConfig "WANS[$wanId].mark")
@@ -1158,7 +1222,7 @@ function testRouteTableGateway(){
   fi
 }
 
-# Definir link como rota default
+# Definir link WAN como rota default
 function setDefaultGateway(){
   local wanId=$1
   local gateway=$(getConfig "WANS[$wanId].gateway")
@@ -1174,7 +1238,7 @@ function setDefaultGateway(){
   fi
 }
 
-# Retornar WAN ID gateway padrão atual do sistema
+# Retorna WAN que está definido como gateway padrão
 function getCurrentDefaultGateway(){
   # Gateway atual do sistema
   local gateway=$(ip --json route show default | $YQ '.[] | .gateway')
@@ -1185,6 +1249,7 @@ function getCurrentDefaultGateway(){
   echo $wanId
 }
 
+# Define/Remove regras de roteamento da tabela de roteamento dos links WAN
 function setRulesTableRoute(){
   local opt=$1
   local wanId=$2
@@ -1214,6 +1279,7 @@ function setRulesTableRoute(){
   fi
 }
 
+# Testa se as regras de roteamento da tabela de roteamento dos links WAN estão definidas
 function testRulesTableRoute(){
   local wanId=$1
 
@@ -1245,6 +1311,7 @@ function testRulesTableRoute(){
   return 0
 }
 
+# Define/Remove filtros básicos de marcação de pacotes iptables
 function setBasicFilters(){
   local opt=$1
 
@@ -1260,8 +1327,8 @@ function setBasicFilters(){
     iptables -t mangle -D OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$comment" -j CONNMARK --restore-mark 2> /dev/null
   done
 
-  while iptables -t mangle -C POSTROUTING -m conntrack --ctstate NEW -m mark ! --mark 0x0 -m comment --comment "$comment" -j CONNMARK --save-mark 2> /dev/null; do
-    iptables -t mangle -D POSTROUTING -m conntrack --ctstate NEW -m mark ! --mark 0x0 -m comment --comment "$comment" -j CONNMARK --save-mark 2> /dev/null
+  while iptables -t mangle -C POSTROUTING -m conntrack --ctstate NEW -m mark ! --mark 0 -m comment --comment "$comment" -j CONNMARK --save-mark 2> /dev/null; do
+    iptables -t mangle -D POSTROUTING -m conntrack --ctstate NEW -m mark ! --mark 0 -m comment --comment "$comment" -j CONNMARK --save-mark 2> /dev/null
   done
 
   if [ "$opt" == "--add" ]; then
@@ -1272,7 +1339,7 @@ function setBasicFilters(){
       # Pacotes em OUTPUT com estados ESTABLISHED ou RELATED com marcação de pacotes CONNMARK definida, devem ter a marcação netfilter aplicada/restaurada
       if result=$(iptables -t mangle -I OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$comment" -j CONNMARK --restore-mark 2>&1); then
         # Pacotes em POSTROUTING com estado NEW com marcação de pacotes netfilter definida, devem ter a marcação CONNMARK aplicada
-        if result=$(iptables -t mangle -I POSTROUTING -m conntrack --ctstate NEW -m mark ! --mark 0x0 -m comment --comment "$comment" -j CONNMARK --save-mark 2>&1); then
+        if result=$(iptables -t mangle -I POSTROUTING -m conntrack --ctstate NEW -m mark ! --mark 0 -m comment --comment "$comment" -j CONNMARK --save-mark 2>&1); then
           _success "Definido filtros básicos de marcação de pacotes iptables."
           return 0
         fi
@@ -1287,6 +1354,7 @@ function setBasicFilters(){
   fi
 }
 
+# Testa se os filtros básicos de marcação de pacotes iptables estão definidos
 function testBasicFilters(){
   local wanId=$1
 
@@ -1306,6 +1374,7 @@ function testBasicFilters(){
   return 1
 }
 
+# Define/Remove filtro INPUT de marcação de pacotes iptables
 function setInputIptablesFilters(){
   local opt=$1
   local wanId=$2
@@ -1339,6 +1408,7 @@ function setInputIptablesFilters(){
   fi
 }
 
+# Testa se o filtro INPUT de marcação de pacotes iptables está definido
 function testInputIptablesFilters(){
   local wanId=$1
 
@@ -1355,6 +1425,7 @@ function testInputIptablesFilters(){
   fi
 }
 
+# Remove entradas conntrack do link WAN padrão
 function conntrackDelete() {
   local proto="$1"
 
@@ -1461,6 +1532,7 @@ function conntrackDelete() {
   done
 }
 
+# Define/Remove filtros iptables de redirecionamento de tráfego
 function setIptablesFilters(){
   local opt=$1
   local wanId=$2
@@ -1500,10 +1572,10 @@ function setIptablesFilters(){
     local _src="-s $src"
 
     local _dst
-    if [ "$dst" == '!localnets' ]; then
-      # Remove a string "!localnets" para processamento posterior por conntrackDelete()
+    if [ "$dst" == '!multiwans-localnets' ]; then
+      # Remove a string "!multiwans-localnets" para processamento posterior por conntrackDelete()
       dst=""
-      _dst='-m set ! --match-set localnets dst'
+      _dst='-m set ! --match-set multiwans-localnets dst'
     else
       _dst="-s $dst"
     fi
@@ -1582,6 +1654,7 @@ function setIptablesFilters(){
   return 0
 }
 
+# Testa se os filtros iptables de redirecionamento de tráfego estão definidos
 function testIptablesFilters(){
   local wanId=$1
 
@@ -1620,8 +1693,8 @@ function testIptablesFilters(){
     local _src="-s $src"
 
     local _dst
-    if [ "$dst" == "!localnets" ]; then
-      _dst="-m set ! --match-set localnets dst"
+    if [ "$dst" == "!multiwans-localnets" ]; then
+      _dst="-m set ! --match-set multiwans-localnets dst"
     else
       _dst="-s $dst"
     fi
@@ -1665,6 +1738,7 @@ function testIptablesFilters(){
 
 }
 
+# Reiniciar interface de rede
 function restartIface(){
   local wanId=$1
 
@@ -1687,16 +1761,18 @@ function restartIface(){
   fi
 }
 
+# Testa se a interface de rede está disponível
 function testIfaceAvailable(){
   local wanId=$1
   local iface=$(getConfig "WANS[$wanId].iface")
 
-  if ! ip link show dev $iface > /dev/null 2>&1; then
+  if ! ip link show dev $iface &>/dev/null; then
     _error "A interface de rede \"$iface\" está desconectada fisicamente ou sem drivers no sistema."
     return 1
   fi
 }
 
+# Testa se a interface de rede está ativa
 function testIfaceEnabled(){
   local wanId=$1
   local iface=$(getConfig "WANS[$wanId].iface")
@@ -1707,6 +1783,7 @@ function testIfaceEnabled(){
   fi
 }
 
+# Testa se a interface de rede está conectada
 function testIfaceConnection(){
   local wanId=$1
   local iface=$(getConfig "WANS[$wanId].iface")
@@ -1717,6 +1794,7 @@ function testIfaceConnection(){
   fi
 }
 
+# Testa se as configurações da interface de rede estão corretas
 function testIfaceConfiguration(){
   local wanId=$1
   local iface=$(getConfig "WANS[$wanId].iface")
@@ -1772,14 +1850,11 @@ function dns(){
     # Tentativa de resolução de nome nos servidores DNS
     for server_dns in ${dns//,/\ }; do
 
-      #####################################################################################################################################
       # O comando abaixo captura a saída do comando dig, retira as linhas que contém o ip do servidor DNS responsável pela pesquisa;
       # acrescenta ao final de cada linha o carácter ":" e o endereço do servidor DNS. Acrescentar o DNS no final
       # serve para identificar mais tarde que servidor resolveu o endereço.
       # A opção "-b" do comando dig é primordial para identificar por qual link a pesquisa será feita.
       # Caso o endereço do servidor DNS seja o localhost(127.0.0.1), a opção "-b" será ignorada.
-      #####################################################################################################################################
-
       if [ "$server_dns" == "127.0.0.1" ]; then
         local result=$(dig @${server_dns} $address A +tries=$DNS_RETRY +time=$DNS_TIMEOUT +short | grep -v ';\|^$' | sed "s/$/:${server_dns}/g")
       else
@@ -1801,7 +1876,7 @@ function dns(){
   return 1
 }
 
-# Teste de conectividade com a internet
+# Teste de conectividade com a internet via ping
 function testPing() {
   local wanId="$1"
   local wanIp=$(getConfig "WANS[$wanId].ip")
@@ -1841,7 +1916,7 @@ function setStatusWan(){
   local iface=$(getConfig "WANS[$wanId].iface")
 
   # Registra mudança de status em variável global
-  [ "$current_status" != "UNKNOW" ] && [ "$current_status" != "$status" ] && WANS_STATE_CHANGE[$wanId]=true
+  [ "$current_status" != "UNKNOW" ] && [ "$current_status" != "$status" ] && WANS_STATE_CHANGE[wanId]=true
 
   setConfig "WANS[$wanId].status" "$status"
 
@@ -1893,6 +1968,7 @@ function setOffWan(){
   scriptHelper down $wanId
 }
 
+# Executa script auxiliares para serem executados após UP e DOWN dos links WANS
 function scriptHelper(){
   local action=$1
   local wanId=$2
@@ -1911,46 +1987,12 @@ function scriptHelper(){
   done
 }
 
+# Inicia o daemon
 function startDaemon(){
-  if ! statusExec; then
-    _error "O daemon ($$) já está em execução.\nO PID do processo em execução é ($(pidof -o $$ -o $PPID -o %PPID -x $SCRIPT_NAME 2>&1))."
-    die 1
-  fi
-
-  if ! [ "$CONNTRACK" ]; then
-    _error "A ferramenta auxiliar \"conntrack\" não está instalada."
-    die 1
-  fi
-
-  if ! [ "$IPSET" ]; then
-    _error "A ferramenta auxiliar \"ipset\" não está instalada."
-    die 1
-  fi
-
-  if ! [ "$CURL" ]; then
-    _error "A ferramenta auxiliar \"curl\" não está instalada."
-    die 1
-  fi
-
-  if ! [ "$RGXG" ]; then
-    _error "A ferramenta auxiliar \"rgxg\" não está instalada."
-    die 1
-  fi
-
-  if ! [ "$SENDEMAIL" ]; then
-    _error "A ferramenta auxiliar \"sendEmail\" não está instalada."
-    die 1
-  fi
-
-  installYq
-  if ! [ "$YQ" ]; then
-    _error "A ferramenta auxiliar \"$YQ\" não está instalada."
-    die 1
-  fi
-
   # Apagar registros de logs
   unset LOG_MESSAGE
 
+  checkTools
   loadSettings
   validAndSetConfig
   reorderWans
@@ -1961,7 +2003,8 @@ function startDaemon(){
   info "$_BOX_LINE INICIANDO MULTIWANS"
   info "$_BOX_BOTTOM"
 
-  setLocalnets
+  # Criar lista IPSET com redes locais
+  setListIP multiwans-localnets "$LOCALNETS"
 
   local wanId
   for wanId in $(getListIds WANS); do
@@ -2038,14 +2081,14 @@ function startDaemon(){
   # Limpa o cache das tabelas de roteamento
   ip route flush cache
 
-  #info "$(footer)"
-  #mail "START"
+  info "$(footer)"
+  mail "START"
 
   # Apagar registros de logs
   unset LOG_MESSAGE
-
 }
 
+# Para o daemon
 function stopDaemon(){
   # Definir início de execução de script
   local START_TIME=$(date +%s);
@@ -2129,15 +2172,15 @@ function stopDaemon(){
   # Remover arquivo de status de links
   rm -f $DAEMON_STATUS_FILE 2> /dev/null
 
-  #info "$(footer)"
-  #mail "STOP"
+  info "$(footer)"
+  mail "STOP"
 
   # Apagar registros de logs
   unset LOG_MESSAGE
 }
 
+# Testa as configurações e conectividade dos links WANS
 function testWans(){
-
   # Definir início de execução de script
   local START_TIME=$(date +%s);
 
@@ -2161,11 +2204,10 @@ function testWans(){
     # Se estiver desativado, continuar para o próximo link WAN
     $enabled || continue
 
-    WANS_STATE_CHANGE[$wanId]=false
+    WANS_STATE_CHANGE[wanId]=false
 
     local description=$(getConfig "WANS[$wanId].description")
     local orderFailover=$(getConfig "WANS[$wanId].orderFailover")
-    local startingStatus=$(getConfig "WANS[$wanId].status")
 
     info "\n$_BOX_TOP"
     info "$_BOX_LINE MONITORANDO LINK $description"
@@ -2199,14 +2241,10 @@ function testWans(){
       continue
     fi
 
-    #echo ">>>>>>>>>>>>>> primeiro estagio <<<<<<<<<<<<<<<<<<<<"
-    #read
     ########################################################################
     # O link está ONLINE.
     # Deve-se realizar teste de definição de rota padrão e regras iptables.
     ########################################################################
-
-    set -x
 
     # Link sem order de failover não pode ser definido como rota padrão
     if [ "$orderFailover" != "disabled" ] && ! $isSetDefaultGateway; then
@@ -2249,14 +2287,27 @@ function testWans(){
       fi
     fi
 
-    #echo ">>>>>>>>>>>>>> segundo estagio <<<<<<<<<<<<<<<<<<<<"
-    #read
     ####################################################################################
-    ## Caso o link não seja definido como rota padrão, executa-se as análises abaixo:
+    # Caso o link não seja definido como rota padrão, executa-se as análises abaixo:
     ####################################################################################
+
+    local useListLocalnets=$(getConfig "WANS[$wanId].useListLocalnets")
+
+    if ${useListLocalnets:-false}; then
+      if ! testListIP multiwans-localnets "$LOCALNETS"; then
+        # A lista não existe ou falta endereços IP's
+        setStatusWan $wanId OFF
+
+        if setListIP multiwans-localnets "$LOCALNETS"; then
+          setStatusWan "$wanId" ON
+        else
+          setOffWan $wanId "O link \"$description\" está ONLINE mas não foi possível ativar o serviço.\nVerifique os logs acima e contatar equipe de infraestrutura!"
+          continue
+        fi
+      fi
+    fi
 
     if ! testIptablesFilters $wanId; then
-
       # Falta regras de redirecionamento, portanto o link atualmente está OFFLINE
       setStatusWan $wanId OFF
 
@@ -2269,48 +2320,38 @@ function testWans(){
       else
         setOffWan $wanId "O link \"$description\" está ONLINE mas não foi possível ativar o serviço.\nVerifique os logs acima e contatar equipe de infraestrutura!"
       fi
-
     fi
 
   done
 
-  #echo ">>>>>>>>>>>>>> terceiro estagio <<<<<<<<<<<<<<<<<<<<"
-  #read
-
-  # Variável que define envio de e-mail. O valor definido será o assunto do e-mail.
-  # Valor="NONE" -> Não envia
-  # Valor="<qualquer outro valor>" -> Envia e-mail
-  local sendMail="NONE"
+  # Define o assunto do alerta
+  local subject=""
 
   # Verifica se há erros na mensagem de log
   # OBS: Utilizado regex para que possíveis logs de auditoria não capturem a palavra ERROR
   #      e acabem gerando falso positivo em alertas.
   if grep -q '[E][R][R][O][R]:' <<< "$LOG_MESSAGE"; then
-    COUNT_ERROR=${COUNT_ERROR:-0}
-
-    if grep -q "true" <<< "${WANS_STATE_CHANGE[@]}" || [ $COUNT_ERROR -lt $ALERTS_MAX ] || [ $((COUNT_ERROR % ALERTS_RESEND)) -eq 0 ]; then
-      sendMail="ERROR"
+    if grep -q "true" <<< "${WANS_STATE_CHANGE[@]}" || (( ALERT_COUNT < ALERTS_MAX )) || (( START_TIME - LAST_ALERT_TIME >= ALERTS_INTERVAL * 60 )); then
+      subject="ERROR"
     fi
-
-    ((COUNT_ERROR++))
   elif grep -q "true" <<< "${WANS_STATE_CHANGE[@]}"; then
-    sendMail="WARNING"
+    subject="WARNING"
   else
-    COUNT_ERROR=0  # Zera contador de erros
+    ALERT_COUNT=0
+    LAST_ALERT_TIME=0
   fi
 
   # Envia e-mail se necessário
-  if [[ "$sendMail" != "NONE" ]]; then
-    #LOG_MESSAGE="$(header)${LOG_MESSAGE}$(footer)"
-    mail "$sendMail"
+  if [ "$subject" ]; then
+    LOG_MESSAGE="$(header)${LOG_MESSAGE}$(footer)"
+    mail "$subject"
+
+    ((ALERT_COUNT++))
+    LAST_ALERT_TIME=$(date +%s)
   fi
 
   # Apagar registros de logs
   unset LOG_MESSAGE
-
-  set +x
-  #echo ">>>>>>>>>>>>>> FIM TESTE <<<<<<<<<<<<<<<<<<<<"
-  #read
 }
 
 ###############################################################################################################
@@ -2334,22 +2375,21 @@ trap '_exit EXIT $?' EXIT
 # Iniciando sistema
 startDaemon
 
-# Loop de monitoramento dos links
 while true; do
 
-  now=$(date +%s)
+  startTime=$(date +%s)
 
   # Testa links
   testWans
 
-  last=$(date +%s)
+  endTime=$(date +%s)
 
   sleepTime=0
   # Verifique o tempo necessário de espera antes da próxima execução.
   # Ex: Se a execução levar mais tempo do que o intervalo desejado (por exemplo, 1 minuto),
   #     então a próxima execução deve iniciar imediatamente, sem aguardar.
-  if [[ $((now-last+DAEMON_RUN_INTERVAL+1)) -lt $((DAEMON_RUN_INTERVAL)) ]]; then
-    sleepTime=$((now-last+DAEMON_RUN_INTERVAL))
+  if [[ $((startTime-endTime+DAEMON_RUN_INTERVAL+1)) -lt $((DAEMON_RUN_INTERVAL)) ]]; then
+    sleepTime=$((startTime-endTime+DAEMON_RUN_INTERVAL))
   fi
 
   # Aguarda o tempo necessário antes do próximo teste.
@@ -2360,8 +2400,5 @@ while true; do
   for ((i=0;i<sleepTime;i++)); do
     sleep 1
   done
-
-  echo -e '\n\n#####################################---------------------------#####################################\n\n'
-  read
 
 done

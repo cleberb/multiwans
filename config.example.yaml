@@ -1,0 +1,140 @@
+###############################################################################################################
+# MultiWans - Failover e redirecionamento de links WANS
+# Desenvolvedor: Cleberson Vieira
+# Version: 1.0
+###############################################################################################################
+
+company:
+  # Nome da empresa
+  name: CLEBERSON
+  # Departamento responsável pelo gestão do sistema
+  department: Infraestrutura de T.I.
+  # Link para a página principal da empresa
+  site: https://linkedin.com/in/cleberson-batista/
+
+daemon:
+  # Tempo(em segundos) de intervalo para executar os testes dos links WANS
+  # Valores válidos: 10 a 60
+  # Valores padrão: 20
+  runInterval: 20
+  # Arquivo de status de links WANS
+  # Utilizado para monitoramento em tempo real por outras aplicações como zabbix
+  statusFile: /tmp/.multiwans.status
+
+alerts:
+  # Número máximo de alertas enviados logo após detectado falha
+  # Valores válidos: 2 a 10
+  # Valores padrão: 2
+  max: 2
+  # Intervalo (minutos) para voltar a enviar alertas
+  # Valores válidos: 5 a 720 (12h)
+  # Valores padrão: 30
+  interval: 30
+
+ping:
+  # Quantidade de pings enviados (precisa receber pelo menos um para considerar o link ativo)
+  # Valores válidos: 1 e 2
+  # Valores padrão: 1
+  count: 1
+  # Timeout de cada ping disparado
+  # Valores válidos: 1 a 5
+  # Valores padrão: 3
+  timeout: 3
+  # Endereços necessários para realizar teste de conectividade com a internet através de pings
+  # Recomendações:
+  #   - Obrigatório no mínimo 1 endereço IP, para não ser necessário resolução via DNS
+  #   - Preferencialmente deixar o endereço IP, como o primeiro da lista.
+  #     Isso irá garantir um teste mais ágil, não sendo necessário consulta de DNS.
+  targets:
+    - 200.160.0.8 # DNS Registro.br
+    - google.com
+    - a.dns.br
+    - 1.1.1.1     # DNS CloudFlare
+    - 8.8.8.8     # DNS Google
+
+dns:
+  # Quantidade de tentativas de resolução de nomes em um servidor DNS
+  # Valores válidos: 1 a 5
+  # Valores padrão: 1
+  retry: 1
+  # Timeout de pesquisa em servidor DNS
+  # Valores válidos: 1 a 10
+  # Valores padrão: 2
+  timeout: 2
+  # Endereços de servidores de DNS
+  servers:
+    - 127.0.0.1
+    - 1.1.1.1
+    - 8.8.8.8
+
+# Endereços de rede local
+localnets:
+  - 127.0.0.0/8        # loopback
+  - 10.0.0.0/8         # RFC 1918 private
+  - 169.254.0.0/16     # link local
+  - 172.16.0.0/12      # RFC 1918 private
+  - 192.0.2.0/24       # TEST-NET
+  - 192.168.0.0/16     # RFC 1918 private
+  - 224.0.0.0/4        # class D multicast
+  - 240.0.0.0/5        # class E reserved
+  - 248.0.0.0/5        # reserved
+  - 255.255.255.255/32 # broadcast
+
+email:
+  # Endereço de origem do e-mail
+  # Valor padrão: root
+  from: email@empresa.com.br
+  # Endereço(s) de destinatário(s) do e-mail
+  # Mais de um valor, separar por vírgula
+  # Valor padrão: root
+  to: email@empresa.com.br
+  # Endereço do servidor SMTP
+  # Valor padrão: localhost
+  host: smtp.empresa.com.br
+  # Porta do servidor SMTP
+  # Valor padrão: 25
+  port: 587
+  # Usuário para autenticação
+  username: email@empresa.com.br
+  # Senha para autenticação
+  password: S3nh@Al3@t0R1@
+
+WANS:
+  - description: "WAN1"
+    enabled: true
+    mark: 1
+    orderFailover: 1
+    iface: enp0s2
+    ip: 10.0.2.2
+    mask: 24
+    gateway: 10.0.2.1
+
+  - description: "WAN2"
+    enabled: true
+    mark: 2
+    orderFailover: 2
+    iface: enp0s3
+    ip: 10.0.3.2
+    mask: 24
+    gateway: 10.0.3.1
+    filters:
+      - description: "POP/SMTP"
+        note: "Fluxo OUTPUT de POP3/SMTP"
+        enabled: true
+        chainMangle: OUTPUT
+        protocol: tcp
+        dports:
+          - 25
+          - 110
+          - 587
+          - 465
+          - 995
+
+      - description: "HTTP/HTTPS"
+        note: "Fluxo FORWARD de HTTP/HTTPS"
+        enabled: true
+        chainMangle: PREROUTING
+        protocol: tcp
+        dports:
+          - 80
+          - 443
