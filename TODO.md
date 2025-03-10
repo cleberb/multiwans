@@ -11,8 +11,7 @@
 - [x] Não usar módulo/lib externo para garantir um repositório único do projeto.
   - [x] Mapear quais funções serão migradas para o multiwans
 - [x] Validar a estrutura dos logs no console e no corpo do e-mail.
-- [ ] Comentar as funções
-  - [ ] Usar shdoc?
+- [x] Comentar as funções
 - [x] Revisar a mensagem de invalidParam()
 - [x] Validar que mark está sendo salvo em conntrack, para garantir o filtro de exclusão de registros.
 - [ ] Editar README.md
@@ -57,7 +56,9 @@
 - [ ] Existe mudança de estado sem ter ocorrido um erro?
 - [x] Testar lista de IP's localnets.
   - [ ] Após redefinir a lista em caso de falha, é necessário executar um conntrack delete?
-- [ ] Se o link padrão for um com mark=2, como o conntrackDelete() irá se comportar? visto que ele remove apenas mark=0.
-      Talvez seja necessário excluir tudo que não for marcação do link atual.
 - [x] trocar o nome da lista ipset de localnets para multiwans-localnets, para não ter conflito de nome com outras listas.
-- [ ] Validar fluxo de dados via FORWARD e OUTPUT e regras iptables
+- [x] Criar lista ipset localnets, apenas se necessário. Avaliar em startDaemon() se useLocalnets está true.
+- [x] Validar fluxo de dados via FORWARD e OUTPUT e regras iptables
+- [x] Criado nova regra de roteamento para interface de entrada (internet)
+- [ ] Revisar/Validar systemd
+- [x] Verificar duplicidade de WAN description

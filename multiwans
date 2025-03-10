@@ -724,6 +724,12 @@ function validAndSetConfig(){
     [ "$description" ] || invalidParam --wan $wanId description "" "A descrição é obrigatória."
     [ ${#description} -le 100 ] || invalidParam --wan $wanId description "$description" "O comprimento da descrição excede o máximo permitido (100 caracteres)."
 
+    # Garantir um valor sem espaços em branco
+    setConfig "WANS[$wanId].description" "$description"
+
+    [ "$($YQ ".WANS | map(select(.enabled == true and .description == \"$description\")) | group_by(.description) | .[] | select(length > 1) | length > 1" <<< "$SETTINGS_YAML")" == "true" ] && \
+    invalidParam --wan $wanId description "$description" "A descrição está duplicada entre as declarações dos links WANS."
+
     # orderFailover
     if [ "$orderFailover" == "" ]; then
       setConfig "WANS[$wanId].orderFailover" "disabled"
@@ -828,10 +834,12 @@ function validAndSetConfig(){
 
       # description
       [ "$filter_description" ] || invalidParam --filter $wanId $filterId description "" "A descrição é obrigatória."
-
       [ ${#filter_description} -le 100 ] || invalidParam --filter $wanId $filterId description "$filter_description" "O comprimento da descrição excede o máximo permitido (100 caracteres)."
 
-      [ "$($YQ '.WANS | map(.filters[] | .description) | group_by(.) | .[] | select(length > 1) | length > 1' <<< "$SETTINGS_YAML")" == "true" ] && \
+      # Garantir um valor sem espaços em branco
+      setConfig "WANS[$wanId].filters[$filterId].description" "$filter_description"
+
+      [ "$($YQ ".WANS | map(.filters[] | select(.enabled == true and .description == \"$filter_description\")) | group_by(.description) | .[] | select(length > 1) | length > 1" <<< "$SETTINGS_YAML")" == "true" ] && \
       invalidParam --filter $wanId $filterId description "$filter_description" "A descrição está duplicada entre as declarações de filtros dos links WANS."
 
       # chainMangle
@@ -1254,6 +1262,7 @@ function setRulesTableRoute(){
   local opt=$1
   local wanId=$2
 
+  local iface=$(getConfig "WANS[$wanId].iface")
   local ip=$(getConfig "WANS[$wanId].ip")
   local mark=$(getConfig "WANS[$wanId].mark")
   local table="WAN${mark}"
@@ -1263,10 +1272,21 @@ function setRulesTableRoute(){
     ip rule delete table $table 2>/dev/null
   done
 
+  # Remove todas as regras definidas para interface de entrada
+  while [ "$(ip rule show iif $iface 2>/dev/null)" ]; do
+    ip rule delete iif $iface 2>/dev/null
+  done
+
   if [ "$opt" == "--add" ]; then
     local result
-    # IMPORTANTE: As regras devem ser aplicadas nessa ordem, primeiro pela origem, depois por marcação de pacotes.
-    if result=$(ip rule add from $ip table $table 2>&1 && ip rule add fwmark $mark table $table 2>&1); then
+    # IMPORTANTE: - Aplique as regras nesta ordem:
+    #                 1. Origem do pacote
+    #                 2. Marcação de pacotes
+    #                 3. Interface de entrada
+    #
+    #             - A regra da interface de entrada é essencial, pois pacotes vindos da internet também são marcados.
+    #               Sem essa regra, o roteamento pode falhar, fazendo com que os pacotes saiam pela mesma interface em que chegaram.
+    if result=$(ip rule add from $ip table $table 2>&1 && ip rule add fwmark $mark table $table 2>&1 && ip rule add iif $iface from all lookup main 2>&1); then
       _success "Definido regras de roteamento[Origem: \"$ip\" e Marcação: \"$mark\"] da tabela de roteamento \"$table\"."
       return 0
     else
@@ -1283,16 +1303,18 @@ function setRulesTableRoute(){
 function testRulesTableRoute(){
   local wanId=$1
 
+  local iface=$(getConfig "WANS[$wanId].iface")
   local ip=$(getConfig "WANS[$wanId].ip")
   local mark=$(getConfig "WANS[$wanId].mark")
   local mark_hex=$(printf "0x%x" $mark)
   local table="WAN${mark}"
 
-  local rules=$(ip rule show table $table)
+  local rules=$(ip rule show table $table 2>/dev/null; ip rule show iif $iface 2>/dev/null)
   local from_ip_count=$(grep -cE "from $ip lookup $table$" <<< "$rules")
   local from_any_count=$(grep -cE "from [0-9\.\/]+ lookup $table$" <<< "$rules")
   local fwmark_count=$(grep -cE "from all fwmark $mark_hex lookup $table$" <<< "$rules")
   local fwmark_any_count=$(grep -cE "from all fwmark .* lookup $table$" <<< "$rules")
+  local iif_count=$(grep -cE "from all iif $iface lookup main$" <<< "$rules")
 
   if (( from_ip_count == 0 )); then
     _error "A regra de roteamento por origem da tabela \"$table\" não está definida."
@@ -1305,6 +1327,9 @@ function testRulesTableRoute(){
     return 1
   elif (( fwmark_any_count > 1 )); then
     _error "Existe mais de uma regra de roteamento por marcação de pacotes na tabela \"$table\"."
+    return 1
+  elif (( iif_count == 0 )); then
+    _error "A regra de roteamento para interface de entrada \"$iface\" não está definida."
     return 1
   fi
 
@@ -1607,7 +1632,7 @@ function setIptablesFilters(){
 
     if [ "$opt" == "--add" ]; then
       local result
-      if result=$(iptables -t mangle -A $chainMangle $_src $_dst $_protocol $_sports $_dports -m comment --comment "$comment" -j MARK --set-mark $mark 2>&1); then
+      if result=$(iptables -t mangle -A $chainMangle $_src $_dst $_protocol $_sports $_dports -m conntrack --ctstate NEW -m comment --comment "$comment" -j MARK --set-mark $mark 2>&1); then
         _success "Definido filtro iptables de redirecionamento de tráfego \"$filter_description\"."
         ((applied++))
       else
@@ -1719,7 +1744,7 @@ function testIptablesFilters(){
       fi
     fi
 
-    if iptables -t mangle -C $chainMangle $_src $_dst $_protocol $_sports $_dports -m comment --comment "$comment" -j MARK --set-mark $mark 2> /dev/null; then
+    if iptables -t mangle -C $chainMangle $_src $_dst $_protocol $_sports $_dports -m conntrack --ctstate NEW -m comment --comment "$comment" -j MARK --set-mark $mark 2> /dev/null; then
       ((applied++))
     fi
 
@@ -2004,7 +2029,7 @@ function startDaemon(){
   info "$_BOX_BOTTOM"
 
   # Criar lista IPSET com redes locais
-  setListIP multiwans-localnets "$LOCALNETS"
+  [ ${useListLocalnets:-false} ] && setListIP multiwans-localnets "$LOCALNETS"
 
   local wanId
   for wanId in $(getListIds WANS); do
