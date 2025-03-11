@@ -14,8 +14,8 @@
 - [x] Comentar as funções
 - [x] Revisar a mensagem de invalidParam()
 - [x] Validar que mark está sendo salvo em conntrack, para garantir o filtro de exclusão de registros.
-- [ ] Editar README.md
-  - [ ] Falar de STATUS_FILE, e como monitorar ele.
+- [x] Editar README.md
+  - [x] Falar de STATUS_FILE, e como monitorar ele.
 - [x] STATUS_FILE ser um parâmetro de config.yaml?
 - [x] Revisar envio de e-mail
   - [x] definições de servidor, usuário e senha devem ficar definidas no arquivo de configuração?
@@ -24,11 +24,10 @@
 - [x] ícones em formato unicode
 - [x] Mudar estrutura yaml de ping, dns e alert para igual a config de e-mail
 - [x] Criar arquivo config.example.yaml com valores genéricos
-  - [ ] Criar valores de WANS, com todas as possibilidades de campos, pode deixar comentado no arquivo.
+  - [x] Criar valores de WANS, com todas as possibilidades de campos, pode deixar comentado no arquivo.
 - [x] getConfig() retornar lista separado por virgula? ou seria melhor valores por linha e evitar uso de IFS=, ?
 - [x] Configurações globais serem definidas em variáveis globais em checkConfig()?
 - [x] Criar lógica de diretório de scripts UP() e DOWN()
-  - [ ] Verificar se tem scripts sem permissão de execução?
 - [x] Verificar conflito de checkConfig e statusFile.
 - [x] Revisar config.yaml
 - [x] Garantir rpfilter esteja desativado em todas as interfaces
@@ -60,5 +59,4 @@
 - [x] Criar lista ipset localnets, apenas se necessário. Avaliar em startDaemon() se useLocalnets está true.
 - [x] Validar fluxo de dados via FORWARD e OUTPUT e regras iptables
 - [x] Criado nova regra de roteamento para interface de entrada (internet)
-- [ ] Revisar/Validar systemd
 - [x] Verificar duplicidade de WAN description

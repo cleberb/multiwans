@@ -14,8 +14,10 @@ company:
 
 daemon:
   # Tempo(em segundos) de intervalo para executar os testes dos links WANS
+  # OBS: Em execução, esse valor é subtraído o tempo de execução dos testes de conectividade,
+  #      para que o intervalo seja respeitado
   # Valores válidos: 10 a 60
-  # Valores padrão: 20
+  # Valor padrão: 20
   runInterval: 20
   # Arquivo de status de links WANS
   # Utilizado para monitoramento em tempo real por outras aplicações como zabbix
@@ -24,27 +26,26 @@ daemon:
 alerts:
   # Número máximo de alertas enviados logo após detectado falha
   # Valores válidos: 2 a 10
-  # Valores padrão: 2
+  # Valor padrão: 2
   max: 2
   # Intervalo (minutos) para voltar a enviar alertas
   # Valores válidos: 5 a 720 (12h)
-  # Valores padrão: 30
+  # Valor padrão: 30
   interval: 30
 
 ping:
   # Quantidade de pings enviados (precisa receber pelo menos um para considerar o link ativo)
   # Valores válidos: 1 e 2
-  # Valores padrão: 1
+  # Valor padrão: 1
   count: 1
   # Timeout de cada ping disparado
   # Valores válidos: 1 a 5
-  # Valores padrão: 3
+  # Valor padrão: 3
   timeout: 3
-  # Endereços necessários para realizar teste de conectividade com a internet através de pings
-  # Recomendações:
-  #   - Obrigatório no mínimo 1 endereço IP, para não ser necessário resolução via DNS
-  #   - Preferencialmente deixar o endereço IP, como o primeiro da lista.
-  #     Isso irá garantir um teste mais ágil, não sendo necessário consulta de DNS.
+  # Endereços para teste de conectividade com a internet via ping
+  # Observações:
+  #   - Inclua pelo menos um endereço IP para evitar dependência de DNS.
+  #   - O primeiro endereço deve ser um IP para garantir um teste mais rápido, sem necessidade de resolução DNS.
   targets:
     - 200.160.0.8 # DNS Registro.br
     - google.com
@@ -55,11 +56,11 @@ ping:
 dns:
   # Quantidade de tentativas de resolução de nomes em um servidor DNS
   # Valores válidos: 1 a 5
-  # Valores padrão: 1
+  # Valor padrão: 1
   retry: 1
   # Timeout de pesquisa em servidor DNS
   # Valores válidos: 1 a 10
-  # Valores padrão: 2
+  # Valor padrão: 2
   timeout: 2
   # Endereços de servidores de DNS
   servers:
@@ -100,6 +101,89 @@ email:
   password: S3nh@Al3@t0R1@
 
 WANS:
+  # Exemplo e descrição de configuração de links WANS
+  #
+  # # Descrição do link WAN
+  # # Obrigatório e único
+  # # Comprimento máximo: 100 caracteres
+  # - description: "WAN"
+  #   # Nota sobre o link WAN
+  #   note: "Link de internet 2"
+  #   # Habilitar ou desabilitar o link WAN
+  #   # Valores válidos: true, false
+  #   # Valor padrão: true
+  #   enabled: true
+  #   # Marcação de rota
+  #   # Obrigatório e único
+  #   # Valores válidos: 1 a 252
+  #   mark: 1
+  #   # Ordem de failover
+  #   # Obrigatório e único, necessário ter uma ordem crescente iniciando em 1
+  #   # Valores válidos: 1 a 252 ou nulo (para desabilitar failover)
+  #   orderFailover: 1
+  #   # Interface de rede
+  #   # Valores válidos: regex para interfaces de rede (ex: eth0, enp0s3)
+  #   iface: enp0s3
+  #   # Endereço IP
+  #   # Valores válidos: IPv4
+  #   ip: 10.0.3.2
+  #   # Máscara de rede CIDR
+  #   # Valores válidos: 0 a 32
+  #   mask: 24
+  #   # Endereço do gateway
+  #   # Valores válidos: IPv4
+  #   gateway: 10.0.3.1
+  #   # Endereços de servidores de DNS
+  #   # O valor padrão é o mesmo definido em "dns.servers" e segue as mesmas regras de validação
+  #   dns:
+  #     - 127.0.0.1
+  #     - 8.8.8.8
+  #   # Endereços para teste de conectividade com a internet via ping
+  #   # O valor padrão é o mesmo definido em "ping.targets" e segue as mesmas regras de validação
+  #   ping:
+  #     - 1.1.1.1
+  #     - google.com
+  #   # Filtros de tráfego
+  #   filters:
+  #     # Descrição do filtro
+  #     # Obrigatório e único
+  #     # Comprimento máximo: 100 caracteres
+  #     - description: "POP/SMTP"
+  #       # Nota sobre o filtro
+  #       note: "Fluxo OUTPUT de POP3/SMTP"
+  #       # Habilitar ou desabilitar o filtro
+  #       # Valores válidos: true, false
+  #       # Valor padrão: true
+  #       enabled: true
+  #       # Cadeia/Chain de regras de mangle
+  #       # Valores válidos: PREROUTING, OUTPUT
+  #       chainMangle: OUTPUT
+  #       # Protocolo
+  #       # Valores válidos: all, tcp, udp, udplite, sctp, icmp, gre, esp, ah
+  #       protocol: tcp
+  #       # Endereços de origem
+  #       # Valores válidos: IPv4 ou CIDR
+  #       src:
+  #         - 10.0.2.3
+  #         - 10.100.0.0/21
+  #       # Endereços de destino
+  #       # Valores válidos: IPv4 ou CIDR
+  #       dst:
+  #         - 189.45.67.8
+  #       # Portas de origem
+  #       # Valores válidos: 0 a 65535 ou range N:N
+  #       sport:
+  #         - 4567
+  #         - 1024:65535
+  #       # Portas de destino
+  #       # Valores válidos: 0 a 65535 ou range N:N
+  #       dports:
+  #         - 25
+  #         - 110
+  #         - 587
+  #         - 465
+  #         - 995:1000
+
   - description: "WAN1"
     enabled: true
     mark: 1
