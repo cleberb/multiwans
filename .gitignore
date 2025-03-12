@@ -1,6 +1,4 @@
 config.yaml
-config.dev.yaml
-config.hml.yaml
-config.prd.yaml
+config.*.yaml
 test*
 TODO.md
