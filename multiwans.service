@@ -11,6 +11,8 @@ Restart=on-failure
 RestartSec=30
 User=root
 Group=root
+StandardOutput=null
+StandardError=null
 
 [Install]
 WantedBy=multi-user.target

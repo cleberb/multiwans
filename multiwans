@@ -31,6 +31,13 @@ export LC_ALL="C.UTF-8"
 # shellcheck disable=SC2034
 umask=007
 
+###############################################################################################################
+# Variáveis de configurações
+###############################################################################################################
+
+# PID do script
+SCRIPT_PID=$$
+
 # Nome do script
 SCRIPT_NAME="$(basename "$0")"
 
@@ -80,10 +87,6 @@ _BOX_LINE="│"
 
 # Hostname
 HOSTNAME=$(hostname)
-
-###############################################################################################################
-# Variáveis de configurações
-###############################################################################################################
 
 # Arquivo de configuração do sistema
 SETTINGS_FILE="${SCRIPT_DIR}/config.yaml"
@@ -147,14 +150,14 @@ function info(){
   # Removendo possível espaço após caracteres invisíveis
   # shellcheck disable=SC2001
   LOG_MESSAGE+=$(sed 's/\(\xef\xb8\x8f\) /\1/g' <<< "${message}")
-  echo -ne "$message" | tee >(sed '/^$/d' | logger --priority daemon.info --tag ${SCRIPT_NAME}[$$])
+  echo -ne "$message" | tee >(sed '/^$/d' | logger --priority daemon.info --tag $SCRIPT_NAME --id=$SCRIPT_PID)
 }
 
 # Registrar mensagens de erros
 function error(){
   local message="$*\n"
   LOG_MESSAGE+="${message}"
-  echo -ne "$message" | tee >(sed '/^$/d' | logger --priority daemon.err --tag ${SCRIPT_NAME}[$$]) >&2
+  echo -ne "$message" | tee >(sed '/^$/d' | logger --priority daemon.err --tag $SCRIPT_NAME --id=$SCRIPT_PID) >&2
 }
 
 # Registrar mensagens de alerta com ícone
@@ -305,7 +308,7 @@ function runtime(){
 # Verificar se o daemon já está em execução
 # Retorna positivo (0) se não estiver em execução
 function statusExec() {
-  pidof -o $$ -o $PPID -o %PPID -x $SCRIPT_NAME &>/dev/null && return 1 || return 0
+  pidof -o $SCRIPT_PID -o $PPID -o %PPID -x $SCRIPT_NAME &>/dev/null && return 1 || return 0
 }
 
 # Instala ou atualiza a ferramenta yq
@@ -348,7 +351,7 @@ function installYq(){
 # Verifica se as ferramentas utilizadas pelo script estão disponíveis no sistema
 function checkTools() {
     if ! statusExec; then
-    _error "O daemon ($$) já está em execução.\nO PID do processo em execução é ($(pidof -o $$ -o $PPID -o %PPID -x $SCRIPT_NAME 2>&1))."
+    _error "O daemon já está em execução.\nO PID do processo em execução é ($(pidof -o $SCRIPT_PID -o $PPID -o %PPID -x $SCRIPT_NAME 2>&1))."
     die 1
   fi
 
