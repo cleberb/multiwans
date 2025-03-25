@@ -7,7 +7,7 @@
 
 DESCRIPTION="MultiWans - Failover e redirecionamento de links WANS"
 DEVELOPER="Cleberson Batista"
-VERSION="1.0"
+VERSION="1.1"
 
 ###############################################################################################################
 # Opções de configuração do Bash
