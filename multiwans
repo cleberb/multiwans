@@ -1831,8 +1831,9 @@ function testIfaceConfiguration(){
   local mask=$(getConfig "WANS[$wanId].mask")
 
   local json_output=$(ip -json addr show dev $iface)
-  local current_ip=$($YQ '.[] | .addr_info[] | select(.family == "inet") | .local' <<< "$json_output")
-  local current_mask=$($YQ '.[] | .addr_info[] | select(.family == "inet") | .prefixlen' <<< "$json_output")
+  # Verificar apenas endereço primário da interface (addr_info[0])
+  local current_ip=$($YQ '.[] | .addr_info[0] | select(.family == "inet") | .local' <<< "$json_output")
+  local current_mask=$($YQ '.[] | .addr_info[0] | select(.family == "inet") | .prefixlen' <<< "$json_output")
 
   if [ "$current_ip" == "" ]; then
     _error "A interface de rede \"$iface\" está desconfigurada."
