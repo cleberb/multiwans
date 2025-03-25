@@ -1108,26 +1108,19 @@ function testListIP(){
 # Ativa/Desativa RP Filter
 function setRpFilter() {
   local action=$1
-  local wanId=$2
-
-  local iface=$(getConfig "WANS[$wanId].iface")
 
   [ "$action" == "on" ] && value=1 || value=0
 
-  echo "$value" > /proc/sys/net/ipv4/conf/$iface/rp_filter
+  echo 0 | tee /proc/sys/net/ipv4/conf/*/rp_filter > /dev/null
 
-  _success "$([ "$action" == "on" ] && echo "Ativado" || echo "Desativado") RP Filter para interface \"$iface\"."
+  _success "$([ "$action" == "on" ] && echo "Ativado" || echo "Desativado") RP Filter em todas as interface do sistema."
 }
 
 # Testa se o RP Filter está desativado
 function testRpFilter() {
-  local wanId=$1
+  grep -vq '0' /proc/sys/net/ipv4/conf/*/rp_filter || return 0
 
-  local iface=$(getConfig "WANS[$wanId].iface")
-
-  grep -q '0' /proc/sys/net/ipv4/conf/$iface/rp_filter && return 0
-
-  _error "RP Filter está ativo para interface \"$iface\"."
+  _error "RP Filter está ativo em alguma interface do sistema."
   return 1
 }
 
@@ -2034,6 +2027,9 @@ function startDaemon(){
   # Criar lista IPSET com redes locais
   [ ${useListLocalnets:-false} ] && setListIP multiwans-localnets "$LOCALNETS"
 
+  # Desativar RP_FILTER
+  setRpFilter off
+
   local wanId
   for wanId in $(getListIds WANS); do
 
@@ -2055,8 +2051,6 @@ function startDaemon(){
       testIfaceEnabled $wanId || restartIface $wanId || return 1
       testIfaceConnection $wanId || return 1
       testIfaceConfiguration $wanId || return 1
-
-      setRpFilter off $wanId
 
       if [ "$orderFailover" != "" ] && [ "$DEFAULT_GATEWAY" == "" ]; then
         if [ "$(getCurrentDefaultGateway)" == "$wanId" ]; then
@@ -2183,8 +2177,6 @@ function stopDaemon(){
     testIfaceConnection $wanId || continue
     testIfaceConfiguration $wanId || continue
 
-    setRpFilter on $wanId
-
     setDefaultGateway $wanId
   done
 
@@ -2193,6 +2185,9 @@ function stopDaemon(){
   else
     _error "Nenhuma rota padrão definida no sistema."
   fi
+
+  # Habilitar RP_FILTER
+  setRpFilter on
 
   # Limpa o cache das tabelas de roteamento
   ip route flush cache
@@ -2224,6 +2219,9 @@ function testWans(){
   # Variável responsável por identificar se gateway padrão foi definido
   local isSetDefaultGateway=false
 
+  # Validar RP_FILTER
+  testRpFilter || setRpFilter off
+
   local wanId
   for wanId in $(getListIds WANS); do
 
@@ -2246,8 +2244,6 @@ function testWans(){
       testIfaceEnabled $wanId || { setStatusWan $wanId OFF; restartIface $wanId; } || return 1
       testIfaceConnection $wanId || return 1
       testIfaceConfiguration $wanId || return 1
-
-      testRpFilter $wanId || setRpFilter off $wanId
 
       testRouteTable $wanId || { setStatusWan $wanId OFF; setRouteTable --add $wanId; } || return 1
 
