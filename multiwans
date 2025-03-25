@@ -1234,6 +1234,7 @@ function setDefaultGateway(){
   local result
   if result=$(ip route replace default via $gateway 2>&1); then
     DEFAULT_GATEWAY=$wanId
+    conntrackDeleteSNAT
     _success "Definido rota padrão via \"$gateway\"."
     return 0
   else
@@ -1446,7 +1447,14 @@ function testInputIptablesFilters(){
   fi
 }
 
-# Remove entradas conntrack do link WAN padrão
+# Remove entradas conntrack com SNAT diferente do endereço do link WAN padrão
+function conntrackDeleteSNAT(){
+  local ip=$(getConfig "WANS[$DEFAULT_GATEWAY].ip")
+
+  conntrack -L --mark 0 --src-nat 2> /dev/null | grep -v "dst=$ip " | awk '{n=0} {for(i=1;i<=NF;i++){ if($i ~ /^dst=/) n++; if(n==2 && $i ~ /^dst=/) print substr($i, 5) }}' | sort -u | xargs -I {} conntrack -D --mark 0 --src-nat {} 2> /dev/null
+}
+
+# Remove entradas conntrack específicas do link WAN padrão
 function conntrackDelete() {
   local proto="$1"
 
