@@ -48,7 +48,7 @@ O MultiWans é um script em Bash projetado para gerenciar múltiplos links de in
    ```console
    # chown -R root:root /etc/multiwans
    # chmod 750 /etc/multiwans
-   # chmod 750 /etc/multiwans/scripts
+   # mkdir -m 750 /etc/multiwans/scripts
    # chmod 750 /etc/multiwans/multiwans
    ```
 
@@ -93,7 +93,7 @@ O MultiWans é um script em Bash projetado para gerenciar múltiplos links de in
    - Copie o arquivo de serviço para o diretório do systemd:
 
      ```console
-     sudo install -u root -g root -m 644 /etc/multiwans/multiwans.service /etc/systemd/system/
+     sudo install -o root -g root -m 644 /etc/multiwans/multiwans.service /etc/systemd/system/
      ```
 
    - Edite o arquivo `multiwans.service` para garantir que todas as dependências de serviços estejam corretamente configuradas. Por exemplo, se o serviço de firewall tem um nome diferente no seu sistema ou se há outros serviços que `multiwans` depende, edite a seção `[Unit]` do arquivo `multiwans.service`:
@@ -138,10 +138,6 @@ O MultiWans é um script em Bash projetado para gerenciar múltiplos links de in
      ```console
      sudo systemctl status multiwans.service
      ```
-
-   > **Note**
-   >
-   > Certifique-se de que todas as dependências estão corretamente configuradas e que o serviço `multiwans` tem permissão de execução.
 
 ## Uso de Scripts Auxiliares
 
