@@ -305,10 +305,8 @@ function runtime(){
   echo "$_BOX_BOTTOM"
 }
 
-# Verificar se o daemon já está em execução
-# Retorna positivo (0) se não estiver em execução
-# Retorna 1 (falha) se já estiver rodando
-function statusExec() {
+# Verifica se o daemon já está em execução
+function checkRunning() {
   # Captura os PIDs dos processos que correspondem ao nome do script
   # O padrão `.[ /]${SCRIPT_NAME}( |\$)` garante que:
   # - O nome do script aparece como um comando isolado (evita correspondência parcial).
@@ -327,12 +325,11 @@ function statusExec() {
 
       # Verifica se o processo em questão é um script bash
       if [[ "$cmd" =~ bash ]]; then
-        return 1
+        _error "O daemon já está em execução.\nO PID do processo em execução: $p."
+        die 1
       fi
     done
   fi
-
-  return 0
 }
 
 # Instala ou atualiza a ferramenta yq
@@ -374,11 +371,6 @@ function installYq(){
 
 # Verifica se as ferramentas utilizadas pelo script estão disponíveis no sistema
 function checkTools() {
-    if ! statusExec; then
-    _error "O daemon já está em execução.\nO PID do processo em execução é ($(pidof -o $SCRIPT_PID -o $PPID -o %PPID -x $SCRIPT_NAME 2>&1))."
-    die 1
-  fi
-
   if ! [ "$CONNTRACK" ]; then
     _error "A ferramenta auxiliar \"conntrack\" não está instalada."
     die 1
@@ -2048,6 +2040,7 @@ function startDaemon(){
   # Apagar registros de logs
   unset LOG_MESSAGE
 
+  checkRunning
   checkTools
   loadSettings
   validAndSetConfig

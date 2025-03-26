@@ -265,6 +265,7 @@ Ferramentas de monitoramento, como o Zabbix, podem utilizar este arquivo para mo
 - [LARTC Multiple Links Howto](http://www.lartc.org/howto/lartc.rpdb.multiple-links.html)
 - [Multi-Gateway Routing with iptables and iproute2](http://blog.khax.net/2009/11/28/multi-gateway-routing-with-iptables-and-iproute2/)
 - [Multi-home Routing](https://epxx.co/artigos/multihome.html)
+- [Check if a shell script is running or not](https://stackoverflow.com/a/21942859)
 
 ## Contribuindo
 
