@@ -307,8 +307,32 @@ function runtime(){
 
 # Verificar se o daemon já está em execução
 # Retorna positivo (0) se não estiver em execução
+# Retorna 1 (falha) se já estiver rodando
 function statusExec() {
-  pidof -o $SCRIPT_PID -o $PPID -o %PPID -x $SCRIPT_NAME &>/dev/null && return 1 || return 0
+  # Captura os PIDs dos processos que correspondem ao nome do script
+  # O padrão `.[ /]${SCRIPT_NAME}( |\$)` garante que:
+  # - O nome do script aparece como um comando isolado (evita correspondência parcial).
+  # - Ele pode estar precedido por espaço ou `/` (indicando caminho absoluto).
+  # - É seguido por um espaço ou o final da linha (`$`), evitando partes de outros comandos.
+  local pid=$(pgrep -f ".[ /]${SCRIPT_NAME}( |\$)")
+
+  # Remove o próprio PID do script para evitar auto correspondência
+  pid=$(awk -v pid=$SCRIPT_PID '$1 != pid {print $1}' <<< "$pid")
+
+  if [ -n "$pid" ]; then
+    local p
+    for p in $pid; do
+      # Obtém o comando completo usado para iniciar o processo
+      local cmd=$(ps -o cmd= -p "$p")
+
+      # Verifica se o processo em questão é um script bash
+      if [[ "$cmd" =~ bash ]]; then
+        return 1
+      fi
+    done
+  fi
+
+  return 0
 }
 
 # Instala ou atualiza a ferramenta yq
