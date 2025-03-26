@@ -2440,8 +2440,8 @@ while true; do
   # Verifique o tempo necessário de espera antes da próxima execução.
   # Ex: Se a execução levar mais tempo do que o intervalo desejado (por exemplo, 1 minuto),
   #     então a próxima execução deve iniciar imediatamente, sem aguardar.
-  if [[ $((startTime-endTime+DAEMON_RUN_INTERVAL+1)) -lt $((DAEMON_RUN_INTERVAL)) ]]; then
-    sleepTime=$((startTime-endTime+DAEMON_RUN_INTERVAL))
+  if ((endTime - startTime < DAEMON_RUN_INTERVAL)) then
+    sleepTime=$((DAEMON_RUN_INTERVAL - (endTime - startTime) ))
   fi
 
   # Aguarda o tempo necessário antes do próximo teste.
