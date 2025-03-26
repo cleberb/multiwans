@@ -325,7 +325,7 @@ function checkRunning() {
 
       # Verifica se o processo em questão é um script bash
       if [[ "$cmd" =~ bash ]]; then
-        _error "O daemon já está em execução.\nO PID do processo em execução: $p."
+        _error "Script já está em execução.\nPID do processo em execução: $p."
         die 1
       fi
     done
