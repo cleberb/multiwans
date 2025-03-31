@@ -39,25 +39,25 @@ O MultiWans é um script em Bash projetado para gerenciar múltiplos links de in
    ```console
    # wget https://github.com/cleberb/multiwans/archive/refs/heads/main.zip
    # unzip main.zip
-   # mv multiwans-main /etc/multiwans
+   # sudo mv multiwans-main /etc/multiwans
    # rm -f main.zip
    ```
 
 2. **Adequar as permissões do diretório e arquivos:**
 
    ```console
-   # chown -R root:root /etc/multiwans
-   # chmod 750 /etc/multiwans
-   # mkdir -m 750 /etc/multiwans/scripts
-   # chmod 750 /etc/multiwans/multiwans
+   # sudo chown -R root:root /etc/multiwans
+   # sudo chmod 750 /etc/multiwans
+   # sudo mkdir -m 750 /etc/multiwans/scripts
+   # sudo chmod 750 /etc/multiwans/multiwans
    ```
 
 3. **Instalar as Dependências:**
    Verificar e instalar se necessário as ferramentas: `conntrack`, `ipset`, `curl`, `rgxg`, `sendemail` ou `sendEmail`, `yq`.
 
    ```console
-   sudo apt-get update
-   sudo apt-get install conntrack ipset curl rgxg sendemail
+   # sudo apt-get update
+   # sudo apt-get install conntrack ipset curl rgxg sendemail
    ```
 
    > **Note**
@@ -69,7 +69,7 @@ O MultiWans é um script em Bash projetado para gerenciar múltiplos links de in
    - Copie o arquivo de exemplo `config.example.yaml` para `config.yaml`:
 
      ```console
-     cp -a config.example.yaml config.yaml
+     # sudo cp -a config.example.yaml config.yaml
      ```
 
    - O arquivo `config.yaml` é o coração da configuração do MultiWans. Ele permite que você defina todas as opções e regras do sistema. Edite o arquivo `config.yaml` e personalize as configurações.
@@ -83,7 +83,7 @@ O MultiWans é um script em Bash projetado para gerenciar múltiplos links de in
    Execute o script manualmente como root (ou com `sudo`):
 
    ```console
-   sudo /etc/multiwans/multiwans
+   # sudo /etc/multiwans/multiwans
    ```
 
    Para interromper pressione `CTRL+C`.
@@ -93,7 +93,7 @@ O MultiWans é um script em Bash projetado para gerenciar múltiplos links de in
    - Copie o arquivo de serviço para o diretório do systemd:
 
      ```console
-     sudo install -o root -g root -m 644 /etc/multiwans/multiwans.service /etc/systemd/system/
+     # sudo install -o root -g root -m 644 /etc/multiwans/multiwans.service /etc/systemd/system/
      ```
 
    - Edite o arquivo `multiwans.service` para garantir que todas as dependências de serviços estejam corretamente configuradas. Por exemplo, se o serviço de firewall tem um nome diferente no seu sistema ou se há outros serviços que `multiwans` depende, edite a seção `[Unit]` do arquivo `multiwans.service`:
@@ -118,25 +118,25 @@ O MultiWans é um script em Bash projetado para gerenciar múltiplos links de in
    - Recarregue os arquivos de serviços do systemd:
 
      ```console
-     sudo systemctl daemon-reload
+     # sudo systemctl daemon-reload
      ```
 
    - Habilite o serviço para iniciar automaticamente no boot:
 
      ```console
-     sudo systemctl enable multiwans.service
+     # sudo systemctl enable multiwans.service
      ```
 
    - Inicie o serviço manualmente:
 
      ```console
-     sudo systemctl start multiwans.service
+     # sudo systemctl start multiwans.service
      ```
 
    - Verifique o status do serviço para garantir que está funcionando corretamente:
 
      ```console
-     sudo systemctl status multiwans.service
+     # sudo systemctl status multiwans.service
      ```
 
 ## Uso de Scripts Auxiliares
@@ -196,8 +196,8 @@ echo "Rota para 192.168.1.0/24 removida via 10.0.0.1 na interface eth0"
 Certifique-se de que os scripts auxiliares têm permissão de execução:
 
 ```console
-sudo chmod +x /etc/multiwans/scripts/eth0/up/adjust_network_up.sh
-sudo chmod +x /etc/multiwans/scripts/eth0/down/adjust_network_down.sh
+# sudo chmod +x /etc/multiwans/scripts/eth0/up/adjust_network_up.sh
+# sudo chmod +x /etc/multiwans/scripts/eth0/down/adjust_network_down.sh
 ```
 
 ### Considerações
@@ -206,9 +206,11 @@ Os scripts auxiliares podem ter qualquer nome e são executados automaticamente 
 
 Para organizar a ordem de execução dos scripts, você pode prefixar os nomes dos arquivos com números. Por exemplo:
 
-```console
+```bash
 00_script1.sh
 01_script2.sh
+...
+...
 99_script99.sh
 ```
 
