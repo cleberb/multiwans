@@ -7,7 +7,7 @@
 
 DESCRIPTION="MultiWans - Failover e redirecionamento de links WANS"
 DEVELOPER="Cleberson Batista"
-VERSION="1.3"
+VERSION="1.4"
 
 ###############################################################################################################
 # Opções de configuração do Bash
@@ -1654,7 +1654,7 @@ function setIptablesFilters(){
 
     if [ "$opt" == "--add" ]; then
       local result
-      if result=$(iptables -t mangle -A $chainMangle $_src $_dst $_protocol $_sports $_dports -m conntrack --ctstate NEW -m comment --comment "$comment" -j MARK --set-mark $mark 2>&1); then
+      if result=$(iptables -t mangle -A $chainMangle $_src $_dst $_protocol $_sports $_dports -m conntrack --ctstate NEW -m mark --mark 0 -m comment --comment "$comment" -j MARK --set-mark $mark 2>&1); then
         _success "Definido filtro iptables de redirecionamento de tráfego \"$filter_description\"."
         ((applied++))
       else
@@ -1766,7 +1766,7 @@ function testIptablesFilters(){
       fi
     fi
 
-    if iptables -t mangle -C $chainMangle $_src $_dst $_protocol $_sports $_dports -m conntrack --ctstate NEW -m comment --comment "$comment" -j MARK --set-mark $mark 2> /dev/null; then
+    if iptables -t mangle -C $chainMangle $_src $_dst $_protocol $_sports $_dports -m conntrack --ctstate NEW -m mark --mark 0 -m comment --comment "$comment" -j MARK --set-mark $mark 2> /dev/null; then
       ((applied++))
     fi
 
