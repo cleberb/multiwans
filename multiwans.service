@@ -1,6 +1,6 @@
 [Unit]
 Description=MultiWans - Failover e redirecionamento de links WANS
-After=network.target syslog.service named.service postfix.service firewall.service
+After=network.target named.service postfix.service firewall.service
 Requires=network.target
 
 [Service]

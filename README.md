@@ -112,6 +112,8 @@ O MultiWans é um script em Bash projetado para gerenciar múltiplos links de in
      RestartSec=30
      User=root
      Group=root
+     StandardOutput=null
+     StandardError=null
 
      [Install]
      WantedBy=multi-user.target
