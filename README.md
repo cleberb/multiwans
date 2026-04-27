@@ -100,14 +100,18 @@ O MultiWans é um script em Bash projetado para gerenciar múltiplos links de in
 
      ```ini
      [Unit]
-     Description=MultiWans Service
-     After=network.target firewall.service
-     Wants=firewall.service
+     Description=MultiWans - Failover e redirecionamento de links WANS
+     After=network.target named.service postfix.service firewall.service
+     Requires=network.target
 
      [Service]
      Type=simple
      ExecStart=/etc/multiwans/multiwans
+     ExecStop=/bin/kill -15 $MAINPID
      Restart=on-failure
+     RestartSec=30
+     User=root
+     Group=root
 
      [Install]
      WantedBy=multi-user.target

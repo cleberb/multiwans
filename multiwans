@@ -7,7 +7,7 @@
 
 DESCRIPTION="MultiWans - Failover e redirecionamento de links WANS"
 DEVELOPER="Cleberson Batista"
-VERSION="1.4"
+VERSION="1.5"
 
 ###############################################################################################################
 # Opções de configuração do Bash
@@ -1425,15 +1425,39 @@ function setInputIptablesFilters(){
   local comment="MULTIWANS_INPUT_$(sed -e 's/[[:space:]]/_/g' -e 's/.*/\U&/' <<< "$description")"
 
   # Remove todos os filtros definidos
-  while iptables -t mangle -C PREROUTING -i $iface -m conntrack --ctstate NEW -m comment --comment "$comment" -j MARK --set-mark $mark 2> /dev/null; do
-    iptables -t mangle -D PREROUTING -i $iface -m conntrack --ctstate NEW -m comment --comment "$comment" -j MARK --set-mark $mark 2> /dev/null
-  done
+	#   IMPORTANTE:
+	#     A condição "-m policy --pol none --dir in" garante que apenas pacotes que NÃO
+	#     fazem parte de uma política IPsec sejam marcados.
+	#
+	#     Sem esse filtro, pacotes IPsec (ESP/UDP 500/4500) que chegam pela interface
+	#     WAN seriam marcados ainda no PREROUTING, antes da decapsulação (XFRM). Isso faz
+	#     com que a marca (fwmark) seja associada ao fluxo (conntrack) e acabe afetando
+	#     também o tráfego já descriptografado (ex: via VTI).
+	#
+	#     O efeito colateral é que o tráfego interno do túnel pode herdar a marca e ser
+	#     roteado incorretamente (ex: sair pela WAN ao invés da interface do túnel),
+	#     quebrando o fluxo IPsec.
+	#
+	#     Portanto, filtramos apenas "--pol none" para garantir que:
+	#       - Tráfego IPsec não seja marcado
+	#       - Apenas tráfego "clear-text" (internet normal) participe do balanceamento multiwan
+	local rule=(
+		-i "$iface"
+		-m policy --pol none --dir in
+		-m conntrack --ctstate NEW
+		-m comment --comment "$comment"
+		-j MARK --set-mark $mark
+	)
+
+	while iptables -t mangle -C PREROUTING "${rule[@]}" 2>/dev/null; do
+		iptables -t mangle -D PREROUTING "${rule[@]}" 2>/dev/null
+	done
 
   if [ "$opt" == "--add" ]; then
     local result=""
 
     # Pacotes em PREROUTING entrando pela interface WAN com estado NEW, devem ter a marcação netfilter aplicada
-    if result=$(iptables -t mangle -I PREROUTING -i $iface -m conntrack --ctstate NEW -m comment --comment "$comment" -j MARK --set-mark $mark 2>&1); then
+    if result=$(iptables -t mangle -I PREROUTING "${rule[@]}" 2>&1); then
       _success "Definido filtro INPUT \"$iface\" de marcação de pacotes iptables."
       return 0
     else
@@ -1457,7 +1481,15 @@ function testInputIptablesFilters(){
   # Formatar comentário
   local comment="MULTIWANS_INPUT_$(sed -e 's/[[:space:]]/_/g' -e 's/.*/\U&/' <<< "$description")"
 
-  if ! iptables -t mangle -C PREROUTING -i $iface -m conntrack --ctstate NEW -m comment --comment "$comment" -j MARK --set-mark $mark 2> /dev/null; then
+  local rule=(
+		-i "$iface"
+		-m policy --pol none --dir in
+		-m conntrack --ctstate NEW
+		-m comment --comment "$comment"
+		-j MARK --set-mark $mark
+	)
+
+  if ! iptables -t mangle -C PREROUTING "${rule[@]}" 2> /dev/null; then
     _error "O filtro INPUT de marcação de pacotes iptables não está definido."
     return 1
   fi
