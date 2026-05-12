@@ -7,7 +7,7 @@
 
 DESCRIPTION="MultiWans - Failover e redirecionamento de links WANS"
 DEVELOPER="Cleberson Batista"
-VERSION="1.5"
+VERSION="1.6"
 
 ###############################################################################################################
 # Opções de configuração do Bash
@@ -1424,26 +1424,72 @@ function setInputIptablesFilters(){
   # Formatar comentário
   local comment="MULTIWANS_INPUT_$(sed -e 's/[[:space:]]/_/g' -e 's/.*/\U&/' <<< "$description")"
 
-  # Remove todos os filtros definidos
-	#   IMPORTANTE:
-	#     A condição "-m policy --pol none --dir in" garante que apenas pacotes que NÃO
-	#     fazem parte de uma política IPsec sejam marcados.
-	#
-	#     Sem esse filtro, pacotes IPsec (ESP/UDP 500/4500) que chegam pela interface
-	#     WAN seriam marcados ainda no PREROUTING, antes da decapsulação (XFRM). Isso faz
-	#     com que a marca (fwmark) seja associada ao fluxo (conntrack) e acabe afetando
-	#     também o tráfego já descriptografado (ex: via VTI).
-	#
-	#     O efeito colateral é que o tráfego interno do túnel pode herdar a marca e ser
-	#     roteado incorretamente (ex: sair pela WAN ao invés da interface do túnel),
-	#     quebrando o fluxo IPsec.
-	#
-	#     Portanto, filtramos apenas "--pol none" para garantir que:
-	#       - Tráfego IPsec não seja marcado
-	#       - Apenas tráfego "clear-text" (internet normal) participe do balanceamento multiwan
+  # IMPORTANTE:
+  #
+  # Esta regra é responsável por aplicar a marcação (fwmark) em novos fluxos
+  # recebidos pela interface WAN, permitindo que o policy routing (ip rule)
+  # direcione o tráfego de resposta pela mesma operadora/interface de entrada.
+  #
+  # O filtro:
+  #
+  #   -m policy --pol none --dir in
+  #
+  # garante que apenas pacotes que NÃO pertençam a uma política IPsec/XFRM
+  # sejam marcados.
+  #
+  # Isso é necessário porque em túneis route-based VPN (VTI/XFRM), o fluxo:
+  #
+  #   1) chega criptografado pela interface WAN física
+  #   2) passa pelo PREROUTING
+  #   3) é descriptografado pelo XFRM/IPsec
+  #   4) o payload interno é reinjetado novamente no stack de rede
+  #   5) o pacote volta a passar pelo PREROUTING
+  #
+  # Após a descriptografia, o pacote interno:
+  #
+  #   - já NÃO é mais considerado IPsec
+  #   - possui "--pol none"
+  #   - pode ainda manter contexto da interface física original
+  #
+  # Sem este filtro, o tráfego IPsec bruto (ESP/UDP 500/4500) poderia receber
+  # marcação antes da decapsulação, fazendo com que o conntrack associe a
+  # fwmark ao fluxo.
+  #
+  # Além disso, o payload descriptografado do túnel também poderia entrar na
+  # lógica de marcação multiwan, causando:
+  #
+  #   - herança indevida de fwmark
+  #   - persistência via CONNMARK --save-mark
+  #   - restauração automática via CONNMARK --restore-mark
+  #   - roteamento incorreto do tráfego do túnel
+  #   - retorno pela WAN ao invés da VTI/XFRM
+  #
+  # Na prática, isso pode quebrar:
+  #
+  #   - VPN site-to-site
+  #   - SIP/RTP sobre IPsec
+  #   - roteamento interno do túnel
+  #   - policy routing multiwan
+  #
+  # Portanto:
+  #
+  #   - Apenas tráfego clear-text/originado da internet deve receber fwmark
+  #   - Tráfego VPN/IPsec deve permanecer fora da lógica de balanceamento WAN
+  #
+  # IMPORTANTE:
+  #
+  # O filtro "--pol none" sozinho NÃO é suficiente para excluir tráfego já
+  # descriptografado do túnel, pois o payload interno reaparece como tráfego
+  # normal após o XFRM.
+  #
+  # Por isso também excluímos explicitamente redes internas/VPN através do
+  # ipset "multiwans-localnets", evitando que fluxos vindos da VPN sejam
+  # tratados como tráfego de internet comum.
+  #
 	local rule=(
 		-i "$iface"
 		-m policy --pol none --dir in
+		-m set ! --match-set multiwans-localnets src
 		-m conntrack --ctstate NEW
 		-m comment --comment "$comment"
 		-j MARK --set-mark $mark
@@ -1484,6 +1530,7 @@ function testInputIptablesFilters(){
   local rule=(
 		-i "$iface"
 		-m policy --pol none --dir in
+		-m set ! --match-set multiwans-localnets src
 		-m conntrack --ctstate NEW
 		-m comment --comment "$comment"
 		-j MARK --set-mark $mark
