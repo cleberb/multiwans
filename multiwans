@@ -7,7 +7,7 @@
 
 DESCRIPTION="MultiWans - Failover e redirecionamento de links WANS"
 DEVELOPER="Cleberson Batista"
-VERSION="1.6"
+VERSION="1.7"
 
 ###############################################################################################################
 # Opções de configuração do Bash
@@ -2132,7 +2132,7 @@ function startDaemon(){
   info "$_BOX_BOTTOM"
 
   # Criar lista IPSET com redes locais
-  [ ${useListLocalnets:-false} ] && setListIP multiwans-localnets "$LOCALNETS"
+  setListIP multiwans-localnets "$LOCALNETS"
 
   # Desativar RP_FILTER
   setRpFilter off
@@ -2326,6 +2326,9 @@ function testWans(){
   # Variável responsável por identificar se gateway padrão foi definido
   local isSetDefaultGateway=false
 
+  # Validar lista IPSET com redes locais
+	testListIP multiwans-localnets "$LOCALNETS" || setListIP multiwans-localnets "$LOCALNETS"
+
   # Validar RP_FILTER
   testRpFilter || setRpFilter off
 
@@ -2422,22 +2425,6 @@ function testWans(){
     # Caso o link não seja definido como rota padrão, executa-se as análises abaixo:
     ####################################################################################
 
-    local useListLocalnets=$(getConfig "WANS[$wanId].useListLocalnets")
-
-    if ${useListLocalnets:-false}; then
-      if ! testListIP multiwans-localnets "$LOCALNETS"; then
-        # A lista não existe ou falta endereços IP's
-        setStatusWan $wanId OFF
-
-        if setListIP multiwans-localnets "$LOCALNETS"; then
-          setStatusWan "$wanId" ON
-        else
-          setOffWan $wanId "O link \"$description\" está ONLINE mas não foi possível ativar o serviço.\nVerifique os logs acima e contatar equipe de infraestrutura!"
-          continue
-        fi
-      fi
-    fi
-
     if ! testIptablesFilters $wanId; then
       # Falta regras de redirecionamento, portanto o link atualmente está OFFLINE
       setStatusWan $wanId OFF
@@ -2474,7 +2461,7 @@ function testWans(){
 
   # Envia e-mail se necessário
   if [ "$subject" ]; then
-    LOG_MESSAGE="$(header)${LOG_MESSAGE}$(footer)"
+    LOG_MESSAGE="$(header)\n${LOG_MESSAGE}\n$(footer)"
     mail "$subject"
 
     ((ALERT_COUNT++))
