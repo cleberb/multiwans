@@ -7,7 +7,7 @@
 
 DESCRIPTION="MultiWans - Failover e redirecionamento de links WANS"
 DEVELOPER="Cleberson Batista"
-VERSION="1.7"
+VERSION="1.8"
 
 ###############################################################################################################
 # Opções de configuração do Bash
@@ -1426,69 +1426,49 @@ function setInputIptablesFilters(){
 
   # IMPORTANTE:
   #
-  # Esta regra é responsável por aplicar a marcação (fwmark) em novos fluxos
-  # recebidos pela interface WAN, permitindo que o policy routing (ip rule)
-  # direcione o tráfego de resposta pela mesma operadora/interface de entrada.
+  # Esta regra aplica a marcação (fwmark) em novos fluxos recebidos pela
+  # interface WAN, permitindo que o policy routing (ip rule) direcione o
+  # tráfego de resposta pela mesma operadora/interface de entrada.
   #
-  # O filtro:
+  # Entretanto, o tráfego de estabelecimento e transporte do IPsec NÃO deve
+  # participar desta lógica de marcação.
   #
-  #   -m policy --pol none --dir in
+  # Em túneis IPsec route-based (VTI/XFRM), o fluxo ocorre da seguinte forma:
   #
-  # garante que apenas pacotes que NÃO pertençam a uma política IPsec/XFRM
-  # sejam marcados.
+  #   1) o pacote ESP chega pela interface WAN física;
+  #   2) passa pelo PREROUTING;
+  #   3) é processado pelo XFRM/IPsec;
+  #   4) é descriptografado;
+  #   5) o pacote interno é reinjetado no stack de rede pela interface VTI;
+  #   6) o pacote interno percorre novamente o pipeline do kernel.
   #
-  # Isso é necessário porque em túneis route-based VPN (VTI/XFRM), o fluxo:
+  # Por esse motivo, pacotes ESP recebidos na WAN não devem receber fwmark.
+  # Caso contrário, a marca poderá ser associada ao fluxo pelo conntrack,
+  # podendo posteriormente ser restaurada através do CONNMARK, afetando o
+  # roteamento do tráfego encapsulado ou do payload descriptografado.
   #
-  #   1) chega criptografado pela interface WAN física
-  #   2) passa pelo PREROUTING
-  #   3) é descriptografado pelo XFRM/IPsec
-  #   4) o payload interno é reinjetado novamente no stack de rede
-  #   5) o pacote volta a passar pelo PREROUTING
+  # Para evitar esse comportamento, esta regra exclui explicitamente pacotes
+  # do protocolo ESP:
   #
-  # Após a descriptografia, o pacote interno:
+  #   '! -p esp'
   #
-  #   - já NÃO é mais considerado IPsec
-  #   - possui "--pol none"
-  #   - pode ainda manter contexto da interface física original
+  # Dessa forma, apenas tráfego IP comum recebido da Internet participa da
+  # lógica de marcação MultiWAN.
   #
-  # Sem este filtro, o tráfego IPsec bruto (ESP/UDP 500/4500) poderia receber
-  # marcação antes da decapsulação, fazendo com que o conntrack associe a
-  # fwmark ao fluxo.
+  # Além disso, também são excluídas as redes privadas/VPN através do ipset
+  # "multiwans-localnets", impedindo que tráfego já pertencente às redes
+  # internas seja tratado como tráfego de Internet.
   #
-  # Além disso, o payload descriptografado do túnel também poderia entrar na
-  # lógica de marcação multiwan, causando:
+  # Observação:
   #
-  #   - herança indevida de fwmark
-  #   - persistência via CONNMARK --save-mark
-  #   - restauração automática via CONNMARK --restore-mark
-  #   - roteamento incorreto do tráfego do túnel
-  #   - retorno pela WAN ao invés da VTI/XFRM
-  #
-  # Na prática, isso pode quebrar:
-  #
-  #   - VPN site-to-site
-  #   - SIP/RTP sobre IPsec
-  #   - roteamento interno do túnel
-  #   - policy routing multiwan
-  #
-  # Portanto:
-  #
-  #   - Apenas tráfego clear-text/originado da internet deve receber fwmark
-  #   - Tráfego VPN/IPsec deve permanecer fora da lógica de balanceamento WAN
-  #
-  # IMPORTANTE:
-  #
-  # O filtro "--pol none" sozinho NÃO é suficiente para excluir tráfego já
-  # descriptografado do túnel, pois o payload interno reaparece como tráfego
-  # normal após o XFRM.
-  #
-  # Por isso também excluímos explicitamente redes internas/VPN através do
-  # ipset "multiwans-localnets", evitando que fluxos vindos da VPN sejam
-  # tratados como tráfego de internet comum.
+  # Esta regra protege apenas cenários utilizando ESP nativo
+  # (encapsulation=no). Caso a VPN utilize NAT-T (UDP/4500), os pacotes
+  # chegam encapsulados em UDP e deverão ser excluídos separadamente, pois
+  # não serão identificados como protocolo ESP.
   #
 	local rule=(
 		-i "$iface"
-		-m policy --pol none --dir in
+		! -p esp
 		-m set ! --match-set multiwans-localnets src
 		-m conntrack --ctstate NEW
 		-m comment --comment "$comment"
@@ -1529,7 +1509,7 @@ function testInputIptablesFilters(){
 
   local rule=(
 		-i "$iface"
-		-m policy --pol none --dir in
+		! -p esp
 		-m set ! --match-set multiwans-localnets src
 		-m conntrack --ctstate NEW
 		-m comment --comment "$comment"
